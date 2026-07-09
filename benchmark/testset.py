@@ -15,11 +15,15 @@ def _validate(row: dict) -> None:
 
 def load_manifest(path: str) -> list[dict]:
     rows = []
+    seen_ids: set[str] = set()
     with open(path) as f:
         for line in f:
             if line.strip():
                 row = json.loads(line)
                 _validate(row)
+                if row["id"] in seen_ids:
+                    raise ValueError(f"tekrarlanan id: {row['id']}")
+                seen_ids.add(row["id"])
                 rows.append(row)
     return rows
 

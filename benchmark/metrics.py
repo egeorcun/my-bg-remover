@@ -34,6 +34,8 @@ def _gauss_gradient(img: np.ndarray, sigma: float) -> np.ndarray:
 
 
 def grad_error(pred: np.ndarray, gt: np.ndarray, sigma: float = 1.4) -> float:
+    """scipy gaussian türevi kullanır; değerler kendi içinde tutarlıdır, MATLAB tabanlı
+    yayın sayılarıyla birebir karşılaştırılamaz."""
     _check(pred, gt)
     pred_g = _gauss_gradient(pred.astype(np.float64), sigma)
     gt_g = _gauss_gradient(gt.astype(np.float64), sigma)

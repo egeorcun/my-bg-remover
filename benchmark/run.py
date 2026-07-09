@@ -32,7 +32,7 @@ def run_benchmark(models: list[str], manifest_path: str, out_dir: str) -> dict:
             dst = model_dir / f"{row['id']}.png"
             if not dst.exists():
                 alpha = seg.predict_alpha(Image.open(row["image"]))
-                Image.fromarray((alpha * 255).astype(np.uint8)).save(dst)
+                Image.fromarray(np.round(alpha * 255).astype(np.uint8)).save(dst)
             if row["gt_alpha"]:
                 pred = _load_alpha(str(dst))
                 gt = _load_alpha(row["gt_alpha"])
@@ -56,8 +56,25 @@ def run_benchmark(models: list[str], manifest_path: str, out_dir: str) -> dict:
 
     result = {"per_image": per_image, "per_category": per_category, "overall": overall}
     out.mkdir(parents=True, exist_ok=True)
-    (out / "metrics.json").write_text(json.dumps(result, indent=2))
+    metrics_path = out / "metrics.json"
+    result = _merge_metrics(metrics_path, result)
+    metrics_path.write_text(json.dumps(result, indent=2))
     return result
+
+
+def _merge_metrics(metrics_path: Path, new_result: dict) -> dict:
+    """Var olan metrics.json ile birleştir: bu koşuda olmayan modellerin
+    per_image/per_category/overall girdileri korunur, bu koşudakiler üzerine yazılır."""
+    if not metrics_path.exists():
+        return new_result
+    try:
+        existing = json.loads(metrics_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return new_result
+    merged: dict = {}
+    for key in ("per_image", "per_category", "overall"):
+        merged[key] = {**existing.get(key, {}), **new_result.get(key, {})}
+    return merged
 
 
 def main() -> None:

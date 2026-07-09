@@ -57,6 +57,25 @@ def test_resume_skips_existing_outputs(tmp_path):
     assert (tmp_path / "out/metrics.json").read_text() == first
 
 
+def test_metrics_json_merges_across_invocations(tmp_path):
+    manifest = _make_testset(tmp_path)
+    manifest_path = str(manifest)
+    out_dir = str(tmp_path / "out")
+
+    class OtherSeg(FakeSeg):
+        name = "other"
+
+    with patch("benchmark.run.get_segmenter", return_value=FakeSeg()):
+        run_benchmark(["fake"], manifest_path, out_dir)
+    with patch("benchmark.run.get_segmenter", return_value=OtherSeg()):
+        run_benchmark(["other"], manifest_path, out_dir)
+
+    metrics = json.loads((tmp_path / "out/metrics.json").read_text())
+    assert set(metrics["overall"]) == {"fake", "other"}
+    assert set(metrics["per_image"]) == {"fake", "other"}
+    assert set(metrics["per_category"]) == {"fake", "other"}
+
+
 def test_gtless_row_gets_alpha_but_no_metrics(tmp_path):
     manifest = _make_testset(tmp_path)
     img_b = tmp_path / "b.jpg"

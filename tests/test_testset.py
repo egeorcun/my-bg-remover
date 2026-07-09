@@ -27,3 +27,11 @@ def test_missing_key_raises(tmp_path):
     p.write_text(json.dumps({"id": "x", "image": "i.jpg"}) + "\n")
     with pytest.raises(ValueError, match="anahtar"):
         load_manifest(str(p))
+
+
+def test_duplicate_id_raises(tmp_path):
+    p = tmp_path / "m.jsonl"
+    row = {"id": "dup", "image": "i.jpg", "category": "hair", "gt_alpha": None}
+    p.write_text(json.dumps(row) + "\n" + json.dumps(row) + "\n")
+    with pytest.raises(ValueError, match="dup"):
+        load_manifest(str(p))
