@@ -35,14 +35,19 @@ def refine_alpha(
     context: float = 0.35,
     max_patches: int = 6,
 ) -> np.ndarray:
+    if (image.size[1], image.size[0]) != alpha.shape:
+        raise ValueError(
+            f"görsel boyutu {image.size[::-1]} alpha şekliyle {alpha.shape} uyuşmuyor"
+        )
     h, w = alpha.shape
     band = (alpha > low) & (alpha < high)
     out = alpha.copy()
+    rgb = image.convert("RGB")
     for y0, y1, x0, x1 in _regions(band, min_region, max_patches):
         cy, cx = int((y1 - y0) * context), int((x1 - x0) * context)
         yy0, yy1 = max(0, y0 - cy), min(h, y1 + cy)
         xx0, xx1 = max(0, x0 - cx), min(w, x1 + cx)
-        crop = image.convert("RGB").crop((xx0, yy0, xx1, yy1))
+        crop = rgb.crop((xx0, yy0, xx1, yy1))
         refined = segmenter.predict_alpha(crop)
         # feather: bant maskesini yumuşat, yalnız bant içinde harmanla
         local_band = band[yy0:yy1, xx0:xx1].astype(np.float32)

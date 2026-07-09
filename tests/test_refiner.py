@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from PIL import Image
 
 from bgr.refiner import refine_alpha
@@ -56,3 +57,10 @@ def test_contract_preserved():
     out = refine_alpha(seg, img, _blurry_alpha(80, 96))
     assert out.dtype == np.float32 and out.shape == (80, 96)
     assert out.min() >= 0 and out.max() <= 1
+
+
+def test_shape_mismatch_raises():
+    seg = SharpFakeSeg()
+    img = Image.new("RGB", (96, 80))  # (w=96, h=80) -> alpha beklenen (80, 96)
+    with pytest.raises(ValueError):
+        refine_alpha(seg, img, np.ones((80, 80), dtype=np.float32))
