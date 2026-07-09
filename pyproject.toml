@@ -30,6 +30,7 @@ bgr = "bgr.cli:main"
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
+    "nbformat>=5.10.4",
     "pyarrow>=24.0.0",
     "pytest>=8",
 ]
