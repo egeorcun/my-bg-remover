@@ -13,7 +13,8 @@ def test_skips_existing_output(tmp_path):
         m.subscribe.assert_not_called()
 
 
-def test_calls_fal_and_saves(tmp_path):
+def test_calls_fal_and_saves(tmp_path, monkeypatch):
+    monkeypatch.setenv("FAL_KEY", "dummy")
     src = tmp_path / "in.jpg"
     Image.new("RGB", (4, 4), (255, 0, 0)).save(src)
     out = tmp_path / "out.png"
