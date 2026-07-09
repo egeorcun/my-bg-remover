@@ -16,6 +16,9 @@ dependencies = [
     "huggingface-hub>=0.24",
     "fal-client>=0.4",
     "requests",
+    "pymatting>=1.1.15",
+    "numba>=0.60",
+    "llvmlite>=0.43",
 ]
 
 [dependency-groups]
