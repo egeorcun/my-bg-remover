@@ -7,3 +7,5 @@ results/*
 !results/.gitkeep
 .env
 .DS_Store
+.env.local
+.env*
