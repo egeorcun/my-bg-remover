@@ -54,7 +54,7 @@ def env(tmp_path):
 
 
 def test_multiplier_values():
-    assert mc.multiplier("transparent") == 4
+    assert mc.multiplier("transparent") == 10
     assert mc.multiplier("camouflage") == 2
     assert mc.multiplier("hair") == 1
     assert mc.multiplier("complex") == 1
@@ -63,7 +63,7 @@ def test_multiplier_values():
 def test_run_counts_follow_category_multipliers(env):
     counts = mc.run(env["manifest"], env["backgrounds"], per_image=1, seed=42, out_dir=env["out"])
     assert counts["camouflage"] == 2
-    assert counts["transparent"] == 4
+    assert counts["transparent"] == 10
     assert counts["hair"] == 1
     assert "product" not in counts  # gt_alpha=None -> compositing'e dahil edilmez
 
@@ -71,7 +71,7 @@ def test_run_counts_follow_category_multipliers(env):
 def test_run_per_image_multiplies_category_factor(env):
     counts = mc.run(env["manifest"], env["backgrounds"], per_image=3, seed=42, out_dir=env["out"])
     assert counts["camouflage"] == 6
-    assert counts["transparent"] == 12
+    assert counts["transparent"] == 30
     assert counts["hair"] == 3
 
 
@@ -79,7 +79,7 @@ def test_run_writes_valid_manifest(env):
     mc.run(env["manifest"], env["backgrounds"], per_image=1, seed=42, out_dir=env["out"])
     out_manifest = env["out"] / "manifest.jsonl"
     loaded = load_manifest(str(out_manifest))
-    assert len(loaded) == 2 + 4 + 1  # camouflage + transparent + hair
+    assert len(loaded) == 2 + 10 + 1  # camouflage + transparent + hair
     for row in loaded:
         assert Path(row["image"]).exists()
         assert Path(row["gt_alpha"]).exists()

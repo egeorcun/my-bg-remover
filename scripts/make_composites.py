@@ -2,7 +2,7 @@
 eğitim kopyaları üretir (`bgr/compositing.py`: compose + augment).
 
 Kategori bazlı per-image çarpanları (bkz. Faz 2 planı Task 4):
-- transparent: ×`per-image`×4 (compose + augment) — saydamlık az temsil edildiğinden
+- transparent: ×`per-image`×10 (compose + augment) — efektif karışımda ≥%20 pay için (bkz. docs/reports/2026-07-faz2-veri.md karışım hesabı; eski ×4 %7'de kalıyordu)
   yüksek çarpan.
 - camouflage: ×`per-image`×2 ama **compose YOK**, yalnız augment — orijinal arka
   plan korunur (compositing kamuflajı bozar: obje-arka plan doku/renk uyumu
@@ -31,7 +31,7 @@ from PIL import Image
 from benchmark.testset import append_entries, load_manifest
 from bgr.compositing import augment, compose
 
-CATEGORY_MULTIPLIER: dict[str, int] = {"transparent": 4, "camouflage": 2}
+CATEGORY_MULTIPLIER: dict[str, int] = {"transparent": 10, "camouflage": 2}
 DEFAULT_MULTIPLIER = 1
 NO_COMPOSE_CATEGORIES = {"camouflage"}
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
