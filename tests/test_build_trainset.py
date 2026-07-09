@@ -178,3 +178,26 @@ def test_add_source_copy_mode_threads_through(fake_root, monkeypatch):
     assert len(loaded) == 2
     for row in loaded:
         assert not (bt.ROOT / row["image"]).is_symlink()
+
+
+def test_sources_derived_from_source_specs():
+    """SOURCES, tek doğruluk kaynağı SOURCE_SPECS'ten türetilmeli — Colab notebook'u
+    aynı tanımları n olmadan (tam set) kullanır; elle kopya/drift olmamalı."""
+    assert bt.SOURCES, "SOURCES boş olmamalı"
+    for name, img_glob, gt_glob, category, n in bt.SOURCES:
+        spec = bt.SOURCE_SPECS[name]
+        assert spec["img_glob"] == img_glob
+        assert spec["gt_glob"] == gt_glob
+        assert spec["category"] == category
+        assert category != "disvd_tokens"  # token kuralı sample_source'a girmez
+        assert n == bt.LOCAL_SAMPLE_N[name]
+
+
+def test_source_specs_complete_and_dis5ktr_uses_token_rule():
+    for name, spec in bt.SOURCE_SPECS.items():
+        assert set(spec) == {"img_glob", "gt_glob", "category"}, name
+        assert name in bt.LOCAL_SAMPLE_N, f"{name}: LOCAL_SAMPLE_N eksik"
+    assert bt.SOURCE_SPECS["dis5ktr"]["category"] == "disvd_tokens"
+    assert bt.DIS5KTR_IMG_GLOB == bt.SOURCE_SPECS["dis5ktr"]["img_glob"]
+    assert bt.DIS5KTR_GT_GLOB == bt.SOURCE_SPECS["dis5ktr"]["gt_glob"]
+    assert bt.DIS5KTR_N == bt.LOCAL_SAMPLE_N["dis5ktr"]

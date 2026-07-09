@@ -138,7 +138,14 @@ def sample_disvd_tokens(name: str, img_glob: str, gt_glob: str,
     return rows
 
 
-# (kaynak_ad, images_glob, gt_glob, kategori, adet)
+# TEK DOĞRULUK KAYNAĞI: kaynak adı -> glob desenleri + kategori kuralı. Örneklem
+# boyutu BİLİNÇLİ OLARAK burada DEĞİL (LOCAL_SAMPLE_N'de ayrı) — Colab notebook'u
+# (training/prepare_data_colab.ipynb) aynı tanımları n=None (tam set) ile kullanır;
+# glob/kategori bilgisinin notebook'a elle kopyalanıp zamanla sapması (drift) böyle
+# önlenir. category "disvd_tokens" -> kategori dosya adı token'ından atanır
+# (classify_disvd, sample_disvd_tokens ile işlenir); diğerleri sabit kategori
+# (sample_source ile işlenir).
+#
 # NOT (matting setleri araştırması, bkz. data/train_sources.json + Faz 2 T3 raporu):
 # Distinctions-646 (Qiao et al. CVPR2020, HAttMatting) yalnız e-posta ile talep üzerine
 # dağıtılıyor — HİÇBİR HF/genel indirme linki yok, atlandı. HIM2K (Sun et al. CVPR2022,
@@ -147,17 +154,34 @@ def sample_disvd_tokens(name: str, img_glob: str, gt_glob: str,
 # gerekiyor) dağıtılıyor; bu ortamda gdown/Drive kimlik doğrulaması yok (COD10K-TR'deki
 # aynı kısıt) — LOKAL ÖRNEKLEM ATLANDI, kayıtlar data/train_sources.json'da (drive_id +
 # resmi URL + lisans notu) mevcut, Colab'da (T5) indirilecek.
+SOURCE_SPECS: dict[str, dict[str, str]] = {
+    "camotr": {"img_glob": "data/raw_train/camo/im/*", "gt_glob": "data/raw_train/camo/gt/*",
+               "category": "camouflage"},
+    "p3m": {"img_glob": "data/raw_train/p3m/im/*", "gt_glob": "data/raw_train/p3m/gt/*",
+            "category": "hair"},
+    "trans460tr": {"img_glob": "data/raw_train/trans460_train/fg/*",
+                   "gt_glob": "data/raw_train/trans460_train/alpha/*",
+                   "category": "transparent"},
+    "dis5ktr": {"img_glob": "data/raw_train/dis5k/im/*", "gt_glob": "data/raw_train/dis5k/gt/*",
+                "category": "disvd_tokens"},
+}
+
+# Lokal doğrulama örneklemi boyutları (disk bütçesi, bkz. modül docstring'i) — yalnız
+# lokal koşuda anlamlı; Colab tam setle (n=None) çalışır.
+LOCAL_SAMPLE_N: dict[str, int] = {"camotr": 100, "p3m": 100, "trans460tr": 80, "dis5ktr": 100}
+
+# Geriye dönük uyumlu görünüm: (kaynak_ad, images_glob, gt_glob, kategori, adet) —
+# SOURCE_SPECS'ten türetilir (disvd_tokens hariç; o sample_disvd_tokens ile işlenir).
 SOURCES: list[tuple[str, str, str, str, int]] = [
-    ("camotr", "data/raw_train/camo/im/*", "data/raw_train/camo/gt/*", "camouflage", 100),
-    ("p3m", "data/raw_train/p3m/im/*", "data/raw_train/p3m/gt/*", "hair", 100),
-    ("trans460tr", "data/raw_train/trans460_train/fg/*", "data/raw_train/trans460_train/alpha/*",
-     "transparent", 80),
+    (name, spec["img_glob"], spec["gt_glob"], spec["category"], LOCAL_SAMPLE_N[name])
+    for name, spec in SOURCE_SPECS.items()
+    if spec["category"] != "disvd_tokens"
 ]
 
 # DIS5K-TR tek havuzdan örneklenir; kategori dosya adı token'ından atanır.
-DIS5KTR_IMG_GLOB = "data/raw_train/dis5k/im/*"
-DIS5KTR_GT_GLOB = "data/raw_train/dis5k/gt/*"
-DIS5KTR_N = 100
+DIS5KTR_IMG_GLOB = SOURCE_SPECS["dis5ktr"]["img_glob"]
+DIS5KTR_GT_GLOB = SOURCE_SPECS["dis5ktr"]["gt_glob"]
+DIS5KTR_N = LOCAL_SAMPLE_N["dis5ktr"]
 
 
 def build(copy: bool = False) -> None:
