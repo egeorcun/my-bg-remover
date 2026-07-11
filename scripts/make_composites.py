@@ -115,6 +115,20 @@ def run(
     atlanır, yalnız `_o<NN>` seti üretilir (bkz. modül docstring'i "v3" notu)."""
     manifest_path, backgrounds_dir, out_dir = Path(manifest_path), Path(backgrounds_dir), Path(out_dir)
     exclude_source_ids = exclude_source_ids or set()
+
+    # Kopya indeksi `{ci:02d}` ile 2 haneli formatlanır; ci >= 100'de 3 haneye
+    # taşar ve `training.train_colab_lib.strip_composite_copy_suffix`ün
+    # `_[vo]\d{2}$` deseni o id'lerle artık EŞLEŞMEZ — VAL sızıntı koruması
+    # onlar için sessizce baypas olurdu. Kopya sayısı kategori başına <= 99'a
+    # sıkı sınırlanır (pratikte en yüksek mevcut değer transparent x10).
+    max_copies = per_image * max([DEFAULT_MULTIPLIER, *CATEGORY_MULTIPLIER.values()])
+    assert max_copies <= 99 and ORIGINAL_BG_COPIES <= 99, (
+        f"kopya sayısı kategori başına 99'u aşamaz (per_image={per_image} -> en çok "
+        f"{max_copies} _v kopyası; ORIGINAL_BG_COPIES={ORIGINAL_BG_COPIES}): 2 haneli "
+        f"`_v<NN>`/`_o<NN>` isimlendirmesi taşar ve VAL sızıntı korumasının son ek "
+        f"deseni (_[vo]\\d{{2}}$) kırılır."
+    )
+
     out_img_dir = out_dir / "images"
     out_gt_dir = out_dir / "gt"
     out_manifest = out_dir / "manifest.jsonl"

@@ -40,9 +40,11 @@ FARK (v1/v2'nin `colab_devam_hucresi.py`'sinden):
    diskte yalnız `_o00` dosyaları oluşur (idempotent skip-existing zaten
    `export_birefnet.py`'de var — burada ekstra bir şey gerekmez, kaynak manifest
    zaten yalnız `_o00` satırları içeriyor).
-4. Drive'a kopyalama TAM BİR `shutil.copytree(..., dirs_exist_ok=True)` MERGE'i
-   (var olan `_v<NN>` dosyaları SİLİNMEZ/ÜZERİNE YAZILMAZ, yalnız yeni `_o00`
-   dosyaları eklenir) + kompozit manifest'in Drive kopyasına (`train_composites_
+4. Drive'a kopyalama YALNIZ `TRAIN/` alt ağacının `shutil.copytree(...,
+   dirs_exist_ok=True)` MERGE'i (var olan `_v<NN>` dosyaları SİLİNMEZ/ÜZERİNE
+   YAZILMAZ, yalnız yeni `_o00` dosyaları eklenir; src kökündeki KISMİ — yalnız
+   _o00'lu — `stats.json` Drive'daki otoriter TAM stats.json'u ezmesin diye
+   KOPYALANMAZ) + kompozit manifest'in Drive kopyasına (`train_composites_
    manifest.jsonl`) yalnız YENİ id'lerin APPEND edilmesi (tam üzerine yazma
    DEĞİL — devam hücresinin `shutil.copy2` ile TAM üzerine yazması burada YANLIŞ
    olurdu, Drive'daki dosya zaten v1/v2'nin tüm `_v<NN>` satırlarını içeriyor).
@@ -465,17 +467,19 @@ def stage_manifest() -> dict:
 # `derive_val_excluded_source_ids`) `training.train_colab_lib`de (torch-free,
 # birim testli) — bkz. o modülün "7) v3" bölümü.
 # ==========================================================================
-def load_val_excluded_source_ids(val_stems_path: Path) -> set[str]:
+def load_val_excluded_source_ids(val_stems_path: Path) -> tuple[set[str], list[str]]:
     """Drive'daki `val_stems.json`ı (`tcl.load_or_create_val_split`in yazdığı
     `{"val_stems": [...]}` formatı) okuyup `tcl.derive_val_excluded_source_ids`
-    ile kaynak id kümesine çevirir — bu id'ler `_o00` üretiminden hariç tutulur
-    (VAL sızıntı koruması, bkz. görev "VAL leakage guard")."""
+    ile `(kaynak id kümesi, eşleşmeyen stem listesi)` çiftine çevirir — kaynak
+    id'ler `_o00` üretiminden hariç tutulur (VAL sızıntı koruması, bkz. görev
+    "VAL leakage guard"); eşleşmeyen stem'ler için koruma BAYPAS edilmiş olur
+    (bkz. `tcl.strip_composite_copy_suffix` docstring'i), çağıran uyarmalı."""
     if not val_stems_path.exists():
         print(f"UYARI: {val_stems_path} bulunamadı — hiçbir kaynak hariç tutulmuyor "
               f"(VAL bölünmesi henüz yapılmamış olabilir; bu durumda _o00 üretimi TÜM "
               f"kategorilere uygulanır, sızıntı riski yalnız VAL_HOLDOUT'un ZATEN "
               f"var olduğu normal senaryoda geçerlidir).")
-        return set()
+        return set(), []
     payload = json.loads(val_stems_path.read_text())
     return tcl.derive_val_excluded_source_ids(payload.get("val_stems", []))
 
@@ -484,8 +488,17 @@ def stage_composites_o() -> dict:
     report("composites_o", "running")
     import make_composites as mc  # scripts/ sys.path'te
 
-    excluded = load_val_excluded_source_ids(VAL_STEMS_PATH)
+    excluded, unmatched = load_val_excluded_source_ids(VAL_STEMS_PATH)
     print(f"VAL sızıntı koruması: {len(excluded)} kaynak id _o00 üretiminden hariç tutuluyor.")
+    if unmatched:
+        print("=" * 72)
+        print(f"!!! UYARI — VAL SIZINTI KORUMASI KISMEN BAYPAS: {len(unmatched)} val stem'i "
+              f"_v<NN>/_o<NN> son ek deseniyle EŞLEŞMEDİ. Bu stem'lerin ASIL kaynak "
+              f"id'leri hariç tutulaMADI — o kaynakların _o00 kopyaları eğitim setine "
+              f"üretilecek ve aynı görsel hem TRAIN hem VAL'de görülecek (sızıntı). "
+              f"İlk 10 eşleşmeyen stem: {unmatched[:10]}")
+        print("=" * 72)
+        report("composites_o", "warning", unmatched_val_stems=len(unmatched), sample=unmatched[:10])
 
     counts = mc.run(
         manifest_path=Path("data/train/manifest.jsonl"),
@@ -567,8 +580,13 @@ def stage_drive_copy_o() -> None:
     pre_im, pre_gt = len(list(dst_train_im.iterdir())), len(list(dst_train_gt.iterdir()))
     print(f"Merge öncesi Drive TRAIN: im={pre_im}, gt={pre_gt} — beklenen artış: {expected_growth}")
 
-    print(f"Kopyalanıyor (MERGE, silme yok): {src} -> {dst}")
-    shutil.copytree(src, dst, dirs_exist_ok=True)
+    # YALNIZ TRAIN/ alt ağacı kopyalanır — src kökündeki stats.json BİLİNÇLİ
+    # OLARAK KOPYALANMAZ: export_birefnet.export() onu yalnız _o00 setinin
+    # KISMİ istatistikleriyle yazdı; Drive'daki stats.json ise v1/v2'nin TAM
+    # veri setinin otoriter istatistikleri — tüm src kökünü copytree'lemek
+    # onu sessizce EZERDİ (reviewer bulgusu #1).
+    print(f"Kopyalanıyor (MERGE, silme yok, yalnız TRAIN/): {src / 'TRAIN'} -> {dst / 'TRAIN'}")
+    shutil.copytree(src / "TRAIN", dst / "TRAIN", dirs_exist_ok=True)
 
     post_im, post_gt = len(list(dst_train_im.iterdir())), len(list(dst_train_gt.iterdir()))
     print(f"Merge sonrası Drive TRAIN: im={post_im}, gt={post_gt}")

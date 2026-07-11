@@ -549,13 +549,21 @@ def strip_composite_copy_suffix(stem: str) -> str:
     """`<kaynak_id>_v<NN>` veya `<kaynak_id>_o<NN>` -> `<kaynak_id>` (bkz.
     `scripts/make_composites.py` isimlendirme sözleşmesi: `_v<NN>` compose'lu
     kopyalar, `_o<NN>` orijinal-arka-plan kopyaları). Eşleşme yoksa (beklenmeyen
-    bir stem) `stem` OLDUĞU GİBİ döner — aşırı-hariç tutmaktansa az-hariç tutmak
-    tercih edilir (bir kaynak yanlışlıkla VAL sanılıp atlanırsa yalnız o tek
-    `_o00` eksik kalır; sızıntı riski YOKTUR, yalnızca kaçırılan bir fırsat)."""
+    bir stem) `stem` OLDUĞU GİBİ döner.
+
+    DİKKAT — eşleşmeme SIZINTI RİSKİDİR, zararsız değil: eşleşmeyen bir VAL
+    stem'i hariç-tutma kümesine SON EKLİ (yanlış) haliyle girer; bu string
+    kaynak manifest'teki hiçbir `id` ile eşleşmez, dolayısıyla ASIL kaynak id
+    hariç tutulMAZ ve o kaynağın `_o00` kopyası eğitim setine ÜRETİLİR — koruma
+    o kaynak için fiilen BAYPAS edilmiş olur (aynı görsel hem TRAIN'de `_o00`
+    olarak hem VAL'de başka bir kopyasıyla görülür). Bu yüzden çağıranlar
+    eşleşmeyen stem'leri MUTLAKA teşhis etmeli — `derive_val_excluded_source_
+    ids` bunları ayrıca döndürür ve `training/v3_veri_guncelleme_hucresi.py`
+    boş-olmayan bir eşleşmeme listesinde yüksek sesli uyarı basar."""
     return _COMPOSITE_COPY_SUFFIX_RE.sub("", stem)
 
 
-def derive_val_excluded_source_ids(val_stems: list[str]) -> set[str]:
+def derive_val_excluded_source_ids(val_stems: list[str]) -> tuple[set[str], list[str]]:
     """VAL kümesindeki (kompozit) stem'lerden KAYNAK satır id'lerini türetir —
     bu id'ler `scripts/make_composites.py`'nin `_o00` üretiminden hariç
     tutulmalı (VAL sızıntı koruması): VAL_HOLDOUT zaten belirli `_v<NN>`/`_o<NN>`
@@ -564,8 +572,23 @@ def derive_val_excluded_source_ids(val_stems: list[str]) -> set[str]:
     hem TRAIN hem VAL'de görülmesi anlamına gelir — model o KAYNAK görseli
     ezberleyebilir. `training.train_colab_lib.load_or_create_val_split`in
     yazdığı `val_stems.json`daki `"val_stems"` listesi doğrudan bu fonksiyona
-    verilir (bkz. `training/v3_veri_guncelleme_hucresi.py`)."""
-    return {strip_composite_copy_suffix(s) for s in val_stems}
+    verilir (bkz. `training/v3_veri_guncelleme_hucresi.py`).
+
+    Dönüş: `(excluded_source_ids, unmatched_stems)`. `unmatched_stems`, son ek
+    deseniyle (`_[vo]\\d{2}$`) EŞLEŞMEYEN val stem'leri — bunlar hariç-tutma
+    kümesine olduğu gibi (son ekli/yanlış biçimde) girdiğinden kaynak
+    manifest'teki hiçbir id ile eşleşmez ve koruma o kaynaklar için fiilen
+    BAYPAS edilir (ayrıntı: `strip_composite_copy_suffix` docstring'i).
+    Çağıran, `unmatched_stems` boş değilse bunu YÜKSEK SESLE raporlamalı
+    (bkz. v3 hücresindeki `stage_composites_o` uyarısı)."""
+    excluded: set[str] = set()
+    unmatched: list[str] = []
+    for s in val_stems:
+        stripped = strip_composite_copy_suffix(s)
+        if stripped == s:
+            unmatched.append(s)
+        excluded.add(stripped)
+    return excluded, unmatched
 
 
 def merge_composite_manifest(local_manifest_path: str | Path, drive_manifest_path: str | Path) -> int:

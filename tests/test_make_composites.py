@@ -282,6 +282,15 @@ def test_run_o00_deterministic_same_seed(env):
         assert np.array_equal(img1, img2), f"{rid}: aynı seed farklı _o00 çıktısı üretti"
 
 
+def test_run_rejects_copy_counts_that_overflow_two_digit_suffix(env):
+    """per_image x en büyük kategori çarpanı > 99 -> AssertionError: `{ci:02d}`
+    3 haneye taşar ve VAL sızıntı korumasının `_[vo]\\d{2}$` son ek deseni
+    (train_colab_lib.strip_composite_copy_suffix) o id'lerle eşleşmez olurdu."""
+    with pytest.raises(AssertionError, match="99"):
+        # transparent x10 çarpanıyla per_image=10 -> 100 kopya (>99).
+        mc.run(env["manifest"], env["backgrounds"], per_image=10, seed=42, out_dir=env["out"])
+
+
 def test_run_idempotent_rerun_adds_only_missing_o00(env):
     """Var olan bir _v<NN> koşusu üzerine, sonradan _o00 eklemek için tekrar
     koşulduğunda YALNIZ eksik _o00'lar üretilir — mevcut _v<NN> çıktıları

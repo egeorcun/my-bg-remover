@@ -575,20 +575,38 @@ def test_strip_composite_copy_suffix_strips_v_and_o_suffixes():
 
 
 def test_strip_composite_copy_suffix_leaves_unmatched_stems_unchanged():
-    # az-hariç-tutmak tercih edilir (bkz. fonksiyon docstring'i) -- eşleşmeyen
-    # bir stem (örn. son eksiz bir kaynak id) OLDUĞU GİBİ döner.
+    # Eşleşmeyen bir stem (son eksiz kaynak id, ya da 3 haneli indeks) OLDUĞU
+    # GİBİ döner — bu SIZINTI RİSKİDİR (docstring: son ekli hali hariç-tutma
+    # kümesine girer, hiçbir kaynak id ile eşleşmez, koruma o kaynak için
+    # BAYPAS olur); derive_val_excluded_source_ids bu durumu ayrıca raporlar.
     assert strip_composite_copy_suffix("bare_source_id") == "bare_source_id"
+    assert strip_composite_copy_suffix("id_v100") == "id_v100"  # 3 haneli indeks desene UYMAZ
 
 
 def test_derive_val_excluded_source_ids_from_val_stems_list():
     val_stems = ["camo_00365_v03", "trans1_o00", "hair_0042_v00", "hair_0042_v01"]
-    excluded = derive_val_excluded_source_ids(val_stems)
+    excluded, unmatched = derive_val_excluded_source_ids(val_stems)
     # aynı kaynağın birden çok kopyası (hair_0042_v00/_v01) TEK bir kaynak id'e düşer.
     assert excluded == {"camo_00365", "trans1", "hair_0042"}
+    assert unmatched == []
+
+
+def test_derive_val_excluded_source_ids_reports_unmatched_stems():
+    # Son ek deseniyle eşleşmeyen stem'ler koruma-baypas TEŞHİSİ için ayrıca
+    # döndürülmeli — v3 hücresi (stage_composites_o) boş-olmayan listede yüksek
+    # sesli uyarı basar (reviewer bulgusu #3).
+    val_stems = ["a_v00", "garip_stem", "b_o00", "id_v100"]
+    excluded, unmatched = derive_val_excluded_source_ids(val_stems)
+    assert unmatched == ["garip_stem", "id_v100"]
+    assert {"a", "b"} <= excluded
+    # eşleşmeyenler kümeye SON EKLİ/yanlış haliyle girer (dokümante davranış) —
+    # kaynak manifest'te bu id'ler bulunmayacağından koruma onlar için baypas.
+    assert "garip_stem" in excluded
+    assert "id_v100" in excluded
 
 
 def test_derive_val_excluded_source_ids_empty_list():
-    assert derive_val_excluded_source_ids([]) == set()
+    assert derive_val_excluded_source_ids([]) == (set(), [])
 
 
 def test_merge_composite_manifest_appends_only_new_ids(tmp_path):
@@ -673,8 +691,9 @@ def test_o00_end_to_end_simulation_with_val_exclusion_and_drive_merge(tmp_path):
     # hariç tutulmalı (make_composites hâlâ _v'ler için "a"yı işler, ama _o00
     # üretiminden dışlanır).
     val_stems = ["a_v03"]
-    excluded = derive_val_excluded_source_ids(val_stems)
+    excluded, unmatched = derive_val_excluded_source_ids(val_stems)
     assert excluded == {"a"}
+    assert unmatched == []
 
     out_dir = tmp_path / "composites_o"
     counts = mc.run(
