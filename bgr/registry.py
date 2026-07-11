@@ -14,6 +14,11 @@ MODEL_SPECS: dict[str, dict] = {
         "arch_id": "ZhengPeng7/BiRefNet_HR",
         "input_size": 1024,
     },
+    "bgr-v3": {
+        "ckpt": "data/checkpoints/epoch_3.pth",
+        "arch_id": "ZhengPeng7/BiRefNet_HR",
+        "input_size": 1024,
+    },
 }
 
 _GATED_HELP = (
