@@ -8,7 +8,7 @@ from bgr.registry import MODEL_SPECS, get_segmenter
 
 
 def test_known_model_names():
-    assert set(MODEL_SPECS) == {"birefnet-hr", "rmbg-2.0", "bgr-v1"}
+    assert set(MODEL_SPECS) == {"birefnet-hr", "rmbg-2.0", "bgr-v1", "bgr-v2"}
 
 
 def test_bgr_v1_spec_fields():
