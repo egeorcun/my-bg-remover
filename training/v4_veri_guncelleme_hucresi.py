@@ -461,34 +461,51 @@ def _download_toonout() -> int:
         print(f"toonout: {TOONOUT_DIR} zaten {existing_im} çift içeriyor; indirme atlanıyor.")
         return existing_im
 
+    # Depo yapısı (2026-07 itibarıyla doğrulandı): split'ler klasör DEĞİL,
+    # `data/{train,validation,test}_generations_*.tar` arşivleri. Her tar'ın
+    # içinde `<generation_adı>/{im,gt,an}` var. Yalnız train tar'ları indirilir.
+    import tarfile
+
     snap = Path(snapshot_download(repo_id=TOONOUT_HF_REPO, repo_type="dataset",
-                                  allow_patterns=["train/*"]))
-    train_root = snap / "train"
-    assert train_root.is_dir(), (
-        f"ToonOut snapshot'ında train/ bulunamadı: {snap} — repo yapısı değişmiş olabilir "
-        f"(beklenen: im/gt/an alt klasörlü train/val/test split'leri)."
+                                  allow_patterns=["data/train_*.tar"]))
+    tars = sorted((snap / "data").glob("train_*.tar"))
+    assert tars, (
+        f"ToonOut snapshot'ında data/train_*.tar bulunamadı: {snap} — repo yapısı "
+        f"değişmiş olabilir (beklenen: data/train_generations_*.tar arşivleri)."
     )
-    src_im, src_gt = train_root / "im", train_root / "gt"
-    assert src_im.is_dir() and src_gt.is_dir(), (
-        f"ToonOut train split'inde im/ ve gt/ bekleniyordu, bulunan alt dizinler: "
-        f"{[p.name for p in train_root.iterdir() if p.is_dir()]}"
-    )
+    extract_root = TOONOUT_DIR / "_extract"
+    extract_root.mkdir(parents=True, exist_ok=True)
+    for t in tars:
+        with tarfile.open(t) as tf:
+            tf.extractall(extract_root, filter="data")
 
     out_im.mkdir(parents=True, exist_ok=True)
     out_gt.mkdir(parents=True, exist_ok=True)
-    gt_by_stem = {p.stem: p for p in src_gt.iterdir() if p.is_file()}
     copied = 0
-    for img in sorted(p for p in src_im.iterdir() if p.is_file()):
-        gt = gt_by_stem.get(img.stem)
-        if gt is None:
-            continue  # gt'siz görsel eğitime giremez
-        dst_i, dst_g = out_im / img.name, out_gt / gt.name
-        if dst_i.exists() and dst_g.exists():
-            copied += 1
+    for gen_dir in sorted(p for p in extract_root.iterdir() if p.is_dir()):
+        src_im, src_gt = gen_dir / "im", gen_dir / "gt"
+        if not (src_im.is_dir() and src_gt.is_dir()):
             continue
-        shutil.copy2(img, dst_i)
-        shutil.copy2(gt, dst_g)
-        copied += 1
+        # macOS AppleDouble artıkları (`._*`) görüntü değildir — filtrele.
+        gt_by_stem = {p.stem: p for p in src_gt.iterdir()
+                      if p.is_file() and not p.name.startswith("._")}
+        for img in sorted(p for p in src_im.iterdir()
+                          if p.is_file() and not p.name.startswith("._")):
+            gt = gt_by_stem.get(img.stem)
+            if gt is None:
+                continue  # gt'siz görsel eğitime giremez
+            # generation klasörleri arasında ad çakışması olabilir -> öneksle
+            stem = f"{gen_dir.name}_{img.stem}"
+            dst_i = out_im / f"{stem}{img.suffix}"
+            dst_g = out_gt / f"{stem}{gt.suffix}"
+            if dst_i.exists() and dst_g.exists():
+                copied += 1
+                continue
+            shutil.copy2(img, dst_i)
+            shutil.copy2(gt, dst_g)
+            copied += 1
+    shutil.rmtree(extract_root, ignore_errors=True)
+    assert copied > 0, "ToonOut train tar'larından hiç im/gt çifti çıkarılamadı."
     print(f"toonout (train split): {copied} im/gt çifti -> {TOONOUT_DIR} (test split'e DOKUNULMADI).")
     assert copied > 0, "ToonOut train split'inden hiç im/gt çifti çıkarılamadı!"
     return copied
