@@ -241,13 +241,28 @@ def _load_font_paths(font_dir: Path | None) -> list[Path]:
     return sorted(p for p in font_dir.rglob("*") if p.suffix.lower() in FONT_EXTS)
 
 
+def _renders_latin(font: ImageFont.ImageFont) -> bool:
+    """Font Latin glifleri gerçekten çizebiliyor mu? Latin içermeyen fontlar
+    (ör. macOS Supplemental'daki sembol/CJK fontları) her harfi AYNI "tofu"
+    kutusuyla basar — "I" ve "W" maskeleri birebir aynıysa font kullanılamaz."""
+    try:
+        m_i, m_w = font.getmask("I"), font.getmask("W")
+    except OSError:
+        return False
+    return m_i.size != m_w.size or bytes(m_i) != bytes(m_w)
+
+
 def _get_font(font_paths: list[Path], rng: np.random.Generator, size: int) -> ImageFont.ImageFont:
-    if font_paths:
+    for _ in range(8):  # Latin desteği olmayan font seçilirse yeniden dene
+        if not font_paths:
+            break
         path = font_paths[int(rng.integers(0, len(font_paths)))]
         try:
-            return ImageFont.truetype(str(path), size)
+            font = ImageFont.truetype(str(path), size)
         except OSError:
-            pass  # bozuk/okunamayan font dosyası -> varsayılana düş
+            continue  # bozuk/okunamayan font dosyası -> yeni deneme
+        if _renders_latin(font):
+            return font
     try:
         return ImageFont.load_default(size)
     except TypeError:  # Pillow < 10.1: load_default() boyut parametresi almaz
