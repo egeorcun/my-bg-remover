@@ -1,7 +1,10 @@
 """Manifest tabanlı test seti. JSONL: id, image, category, gt_alpha (nullable)."""
 import json
 
-CATEGORIES = {"hair", "transparent", "thin", "product", "complex", "illustration", "general", "camouflage"}
+CATEGORIES = {
+    "hair", "transparent", "thin", "product", "complex", "illustration",
+    "general", "camouflage", "text", "fx",
+}
 _KEYS = {"id", "image", "category", "gt_alpha"}
 
 

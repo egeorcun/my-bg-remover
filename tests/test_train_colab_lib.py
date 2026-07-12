@@ -11,6 +11,7 @@ from training.train_colab_lib import (
     SAMPLER_PRESET_V1,
     SAMPLER_PRESET_V2,
     SAMPLER_PRESET_V3,
+    SAMPLER_PRESET_V4,
     SAMPLER_PRESETS,
     apply_config_patches,
     compute_expected_shares,
@@ -98,11 +99,12 @@ def test_sampler_preset_v1_matches_default_target_share():
     assert SAMPLER_PRESET_V1 == {"transparent": 0.20, "camouflage": 0.20}
 
 
-def test_sampler_presets_registry_has_v1_v2_and_v3():
-    assert set(SAMPLER_PRESETS) == {"v1", "v2", "v3"}
+def test_sampler_presets_registry_has_v1_v2_v3_and_v4():
+    assert set(SAMPLER_PRESETS) == {"v1", "v2", "v3", "v4"}
     assert SAMPLER_PRESETS["v1"] is SAMPLER_PRESET_V1
     assert SAMPLER_PRESETS["v2"] is SAMPLER_PRESET_V2
     assert SAMPLER_PRESETS["v3"] is SAMPLER_PRESET_V3
+    assert SAMPLER_PRESETS["v4"] is SAMPLER_PRESET_V4
     # compute_sample_weights yalnız sum > 1.0'da ValueError fırlatır; tam 1.0'a İZİN VAR
     # (o durumda hedefsiz "_other" örneklere 0 ağırlık düşer — bkz. SAMPLER_PRESET_V2 docstring'i).
     for preset in SAMPLER_PRESETS.values():
@@ -243,6 +245,84 @@ def test_sampler_preset_v3_gives_zero_weight_to_unknown_stems():
     stems_with_unknown = stems + ["gizemli_stem_0001"]  # örn. yeni bir _o00 ama manifest satırı eksik
 
     weights = compute_sample_weights(stems_with_unknown, stem_category, SAMPLER_PRESET_V3)
+    assert weights[-1] == 0.0
+    assert all(w > 0 for w in weights[:-1])
+
+
+# ============================================================================
+# 1c-2) v4 sampler preset (v3 benchmark sonrası: odak complex+thin + yeni
+# yetenekler text/fx/illustration — bkz. SAMPLER_PRESET_V4 docstring'i)
+# ============================================================================
+def test_sampler_preset_v4_values_and_sum_to_one():
+    assert SAMPLER_PRESET_V4 == {
+        "camouflage": 0.12,
+        "transparent": 0.18,
+        "hair": 0.08,
+        "complex": 0.19,
+        "thin": 0.13,
+        "general": 0.04,
+        "text": 0.10,
+        "fx": 0.08,
+        "illustration": 0.08,
+    }
+    # toplam TAM %100 — hedefsiz "_other" stem'lere 0 ağırlık düşer
+    # (bkz. SAMPLER_PRESET_V2 docstring'i, aynı bilinçli tercih).
+    assert sum(SAMPLER_PRESET_V4.values()) == pytest.approx(1.0, abs=1e-9)
+
+
+def test_sampler_preset_v4_uses_only_known_categories():
+    # v4'ün TÜM kategorileri bilinen kümede olmalı: eski 6 kategori + v4'ün
+    # üç yeni yeteneği (text/fx/illustration — v4_veri_guncelleme_hucresi.py
+    # + scripts/make_textfx.py üretir). Yazım hatası (ör. "ilustration")
+    # sampler'da sessizce 0 örnekli hedef olarak kaybolurdu — burada yakalanır.
+    known = {
+        "camouflage", "transparent", "hair", "complex", "thin", "general",
+        "text", "fx", "illustration",
+    }
+    assert set(SAMPLER_PRESET_V4) == known
+
+
+def test_sampler_preset_v4_shifts_shares_from_v3():
+    # v3 benchmark sonrası yön: camo payı düşer (marj devasa: 0.0304 vs
+    # Ideogram 0.1179), hair payı düşer (0.0067 MAE, rmbg 0.0045'e yakın),
+    # transparent v3'ün %24'ünden iner ama korunur (%18 — kovalamaca sürüyor),
+    # yeni yetenekler toplamda anlamlı pay alır.
+    assert SAMPLER_PRESET_V4["camouflage"] < SAMPLER_PRESET_V3["camouflage"]
+    assert SAMPLER_PRESET_V4["hair"] < SAMPLER_PRESET_V3["hair"]
+    assert SAMPLER_PRESET_V4["transparent"] < SAMPLER_PRESET_V3["transparent"]
+    new_share = sum(SAMPLER_PRESET_V4[c] for c in ("text", "fx", "illustration"))
+    assert new_share == pytest.approx(0.26, abs=1e-9)
+
+
+def test_sampler_preset_v4_hits_target_shares_within_one_percent():
+    counts = {
+        "camouflage": 8080,
+        "hair": 9422,
+        "transparent": 4100,
+        "complex": 2190,
+        "thin": 810,
+        "general": 4000,
+        "text": 4000,
+        "fx": 3500,
+        "illustration": 900,
+    }
+    stems, stem_category = _synthetic_stems(counts)
+    weights = compute_sample_weights(stems, stem_category, SAMPLER_PRESET_V4)
+    achieved = compute_expected_shares(weights, stems, stem_category)
+    for cat, target in SAMPLER_PRESET_V4.items():
+        if cat not in achieved:
+            continue
+        assert achieved[cat] == pytest.approx(target, abs=0.01), (
+            f"{cat}: hedef %{target * 100:.1f}, hesaplanan %{achieved[cat] * 100:.1f}"
+        )
+
+
+def test_sampler_preset_v4_gives_zero_weight_to_unknown_stems():
+    counts = {c: 100 for c in SAMPLER_PRESET_V4}
+    stems, stem_category = _synthetic_stems(counts)
+    stems_with_unknown = stems + ["gizemli_stem_0001"]  # örn. manifest satırı eksik yeni bir textfx stem'i
+
+    weights = compute_sample_weights(stems_with_unknown, stem_category, SAMPLER_PRESET_V4)
     assert weights[-1] == 0.0
     assert all(w > 0 for w in weights[:-1])
 

@@ -130,13 +130,51 @@ v3-hazirlik-report.md`). İki somut bulguya cevap verir:
    SAMPLER_PRESET_V2 docstring'i — toparlanmaya devam ediyor, henüz payı
    azaltacak kanıt yok). Bkz. `.superpowers/sdd/v3-hazirlik-report.md`."""
 
+SAMPLER_PRESET_V4: dict[str, float] = {
+    "camouflage": 0.12,
+    "transparent": 0.18,
+    "hair": 0.08,
+    "complex": 0.19,
+    "thin": 0.13,
+    "general": 0.04,
+    "text": 0.10,
+    "fx": 0.08,
+    "illustration": 0.08,
+}
+"""v4 rebalancing hedefi (toplam TAM %100) — v3'ün gerçek benchmark sonuçlarından
+sonraki ayar. Kullanıcı v3 benchmark'ı sonrası odağı iki eksene kaydırdı:
+complex+thin'in toparlanmaya devam etmesi ve YENİ yeteneklerin kazanılması —
+logo/yazı koruma (`text`), obje etrafı VFX parıltı (`fx`) ve illüstrasyon
+(`illustration`); üç yeni kategorinin verisini `training/
+v4_veri_guncelleme_hucresi.py` üretir (`scripts/make_textfx.py` + ToonOut).
+
+1. **transparent %18'de TUTULDU**: Ideogram'ın 0.0343'lük hedefine yalnız
+   0.0043 kaldı — kovalamaca sürüyor, payı kısmak v2 dersinin (payı düşürünce
+   MAE kötüleşti, bkz. SAMPLER_PRESET_V3 docstring'i madde 2) tekrarı olurdu;
+   ama v3'teki %24'lük tek-en-büyük-pay da artık gerekmiyor, %18 koruma için
+   yeterli.
+2. **camouflage %12'ye DÜŞTÜ**: v3 MAE 0.0304 vs Ideogram 0.1179 — marj
+   DEVASA (Ideogram'ın yaklaşık dörtte biri). v2→v3'te %18→%16'ya inen pay,
+   bu marj sayesinde %12'ye kadar güvenle indirilebildi; serbest kalan puanlar
+   yeni kategorilere aktarıldı.
+3. **hair %8'e DÜŞTÜ**: 0.0067 MAE ile rmbg'nin 0.0045'ine zaten yakın —
+   pay azaltılabilir (v3'te %18'di; mutlak hata küçük, koruma için %8 yeter).
+4. **complex %19 / thin %13**: v3'teki %20/%12'ye yakın tutuldu (odak
+   kategoriler — v1'in çöken kategorileri hâlâ öncelikli, thin +1 puanla
+   hafifçe güçlendirildi). general %10'dan %4'e indi (kürasyonlu genel-amaçlı
+   görseller; yeni kategorilere yer açmak için en az riskli kesinti).
+5. **text %10 / fx %8 / illustration %8**: yeni yetenekler — toplam %26'lık
+   pay, modelin bu üç beceriyi sıfırdan öğrenmesine yetecek epoch-içi
+   görünürlük sağlar."""
+
 SAMPLER_PRESETS: dict[str, dict[str, float]] = {
     "v1": SAMPLER_PRESET_V1,
     "v2": SAMPLER_PRESET_V2,
     "v3": SAMPLER_PRESET_V3,
+    "v4": SAMPLER_PRESET_V4,
 }
-"""Notebook `SAMPLER_PRESET` parametresinin ("v1"/"v2"/"v3") çözümlendiği tablo —
-bkz. `training/train_colab.ipynb` parametre hücresi ve hücre (e)."""
+"""Notebook `SAMPLER_PRESET` parametresinin ("v1"/"v2"/"v3"/"v4") çözümlendiği
+tablo — bkz. `training/train_colab.ipynb` parametre hücresi ve hücre (e)."""
 
 
 def resolve_sampler_num_samples(dataset_len: int, num_samples: int | None = None) -> int:
