@@ -1,6 +1,7 @@
 # Lucida
 
 [![HF Model](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-egeorcun%2Flucida-ffcc4d)](https://huggingface.co/egeorcun/lucida)
+[![Live Demo](https://img.shields.io/badge/%F0%9F%9A%80%20Live%20Demo-lucida--demo-5865f2)](https://huggingface.co/spaces/egeorcun/lucida-demo)
 [![License: MIT](https://img.shields.io/badge/License-MIT-2ea44f)](LICENSE)
 [![GitHub Stars](https://img.shields.io/github/stars/egeorcun/lucida?style=social)](https://github.com/egeorcun/lucida/stargazers)
 
@@ -9,7 +10,7 @@
 Lucida is a [BiRefNet](https://github.com/ZhengPeng7/BiRefNet)-based image matting model fine-tuned
 specifically for the cases where general-purpose background removers fall apart: semi-transparent
 objects, camouflaged subjects, logos and typography with soft shadows, glow/VFX effects, and
-illustrations. Weights are on Hugging Face: [egeorcun/lucida](https://huggingface.co/egeorcun/lucida) (MIT).
+illustrations. Weights are on Hugging Face: [egeorcun/lucida](https://huggingface.co/egeorcun/lucida) (MIT). **Try it in your browser (ZeroGPU, a few seconds per image): [live demo](https://huggingface.co/spaces/egeorcun/lucida-demo).**
 
 ## Benchmark
 
