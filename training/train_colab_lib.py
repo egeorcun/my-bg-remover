@@ -228,6 +228,40 @@ illustration .07->.06 (0.0089, ahead of everyone), general .04->.02.
 transparent (.22 — the Ideogram 0.0343 target is still open) and
 complex/thin/fx UNCHANGED."""
 
+SAMPLER_PRESET_V8: dict[str, float] = {
+    "camouflage": 0.12,
+    "transparent": 0.21,
+    "hair": 0.16,
+    "complex": 0.17,
+    "thin": 0.11,
+    "general": 0.02,
+    "text": 0.06,
+    "fx": 0.04,
+    "illustration": 0.05,
+    "design": 0.06,
+}
+"""v8 target (sums to EXACTLY 100%) — the background-purity epoch (HF
+discussion #1, the cat masks: gray smears in the background on real photos
+with furry subjects; measured bg_mae in the hair category: v7 0.0069 vs
+birefnet-hr 0.0003 — 20x). Changes vs v7:
+
+1. **hair .10 -> .16**: the category where the residue lives; the pool also
+   gains ~9,000 bokeh hard-negative copies (make_bokeh_copies.py — defocused
+   backgrounds + bright orbs whose GT is exactly 0), so the raised share is
+   spent directly on the counter-lesson.
+2. **fx .05 -> .04, design .08 -> .06**: both categories carry
+   semi-transparent GT (glow/smoke) — the source of the "keep the faint haze"
+   prior that over-generalizes to real photos. Their targets are comfortably
+   met (fx 0.0180, design 0.0235 — 2x every rival), so the shares are trimmed;
+   the design pool itself is also regenerated with the fixed generator
+   (compact glow support + no glow under the text bands).
+3. **camo .10 -> .12**: recover the v7 regression (0.0249 -> 0.0270).
+4. **transparent .22 -> .21, complex .19 -> .17, thin .12 -> .11,
+   illustration .06 -> .05**: small trims to fund the hair raise — each
+   remains at or above the share that produced its current score, and
+   transparent stays the second-largest share (the Ideogram 0.0343 target is
+   still open)."""
+
 SAMPLER_PRESETS: dict[str, dict[str, float]] = {
     "v1": SAMPLER_PRESET_V1,
     "v2": SAMPLER_PRESET_V2,
@@ -235,6 +269,7 @@ SAMPLER_PRESETS: dict[str, dict[str, float]] = {
     "v4": SAMPLER_PRESET_V4,
     "v5": SAMPLER_PRESET_V5,
     "v7": SAMPLER_PRESET_V7,
+    "v8": SAMPLER_PRESET_V8,
 }
 """The table the notebook's `SAMPLER_PRESET` parameter ("v1"/"v2"/"v3"/"v4")
 is resolved against — see the `training/train_colab.ipynb` parameters cell and

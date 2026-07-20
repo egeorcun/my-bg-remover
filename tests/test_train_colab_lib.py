@@ -16,6 +16,7 @@ from training.train_colab_lib import (
     SAMPLER_PRESETS,
     SAMPLER_PRESET_V5,
     SAMPLER_PRESET_V7,
+    SAMPLER_PRESET_V8,
     apply_config_patches,
     compute_expected_shares,
     compute_sample_weights,
@@ -107,12 +108,20 @@ def test_sampler_preset_v1_matches_default_target_share():
 
 
 def test_sampler_presets_registry_has_v1_v2_v3_and_v4():
-    assert set(SAMPLER_PRESETS) == {"v1", "v2", "v3", "v4", "v5", "v7"}
+    assert set(SAMPLER_PRESETS) == {"v1", "v2", "v3", "v4", "v5", "v7", "v8"}
     assert SAMPLER_PRESETS["v1"] is SAMPLER_PRESET_V1
     assert SAMPLER_PRESETS["v2"] is SAMPLER_PRESET_V2
     assert SAMPLER_PRESETS["v3"] is SAMPLER_PRESET_V3
     assert SAMPLER_PRESETS["v4"] is SAMPLER_PRESET_V4
     assert SAMPLER_PRESETS["v5"] is SAMPLER_PRESET_V5
+    assert SAMPLER_PRESETS["v8"] is SAMPLER_PRESET_V8
+    # v8: the background-purity epoch — hair takes the raise, the
+    # semi-transparent-GT categories (fx/design) fund part of it.
+    assert sum(SAMPLER_PRESET_V8.values()) == pytest.approx(1.0, abs=1e-9)
+    assert SAMPLER_PRESET_V8["hair"] == pytest.approx(0.16)
+    assert SAMPLER_PRESET_V8["fx"] < SAMPLER_PRESETS["v7"]["fx"]
+    assert SAMPLER_PRESET_V8["design"] < SAMPLER_PRESETS["v7"]["design"]
+    assert SAMPLER_PRESET_V8["camouflage"] > SAMPLER_PRESETS["v7"]["camouflage"]
     # compute_sample_weights only raises ValueError on sum > 1.0; exactly 1.0 IS allowed
     # (in that case untargeted "_other" samples get 0 weight — see the SAMPLER_PRESET_V2 docstring).
     for preset in SAMPLER_PRESETS.values():
