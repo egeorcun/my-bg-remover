@@ -397,7 +397,15 @@ def _ray_layer(
         sigma = min(w, h) * float(rng.uniform(0.08, 0.18))
         yy = (np.arange(h, dtype=np.float32) - cy)[:, None]
         xx = (np.arange(w, dtype=np.float32) - cx)[None, :]
-        a = (val * np.exp(-(xx**2 + yy**2) / (2 * sigma**2))).astype(np.float32)
+        rr2 = xx**2 + yy**2
+        a = val * np.exp(-rr2 / (2 * sigma**2))
+        # Compact support (v8): fade to EXACT 0 between 1.8σ and 2.5σ. The
+        # untruncated gaussian tail put a faint non-zero alpha across the
+        # whole canvas GT, teaching the model that a wide haze around any
+        # subject should be kept — which surfaced as gray background smears
+        # on real photos (HF discussion #1, the cat masks).
+        fade = np.clip((2.5 * sigma - np.sqrt(rr2)) / (0.7 * sigma), 0.0, 1.0)
+        a = (a * fade).astype(np.float32)
     else:  # sunburst: evenly spaced ray wedges
         mask = Image.new("L", (w, h), 0)
         d = ImageDraw.Draw(mask)
@@ -619,6 +627,24 @@ def _fit_rgba(img: Image.Image, max_w: int, max_h: int) -> Image.Image:
     return img.resize((max(1, int(img.width * f)), max(1, int(img.height * f))), Image.LANCZOS)
 
 
+def _zero_alpha_in_rects(
+    a: np.ndarray, rects: list[tuple[int, int, int, int]], pad: int
+) -> None:
+    """Zeroes `a` (H, W float alpha, in place) inside each (x0, y0, x1, y1)
+    rect grown by `pad` px — used to keep the glow out of the text bands."""
+    for x0, y0, x1, y1 in rects:
+        a[max(0, y0 - pad) : y1 + pad, max(0, x0 - pad) : x1 + pad] = 0.0
+
+
+def _text_bands(rng: np.random.Generator) -> list[str]:
+    """Which band(s) get a text block — identical draw order to the pre-v8
+    inline code (the second uniform is only consumed when there is ONE band)."""
+    n_text = 1 + (1 if rng.uniform() < SECOND_TEXT_PROB else 0)
+    if n_text == 2:
+        return ["top", "bottom"]
+    return ["top"] if rng.uniform() < 0.5 else ["bottom"]
+
+
 def _render_design_sample(
     rng: np.random.Generator,
     size: tuple[int, int],
@@ -659,9 +685,11 @@ def _render_design_sample(
             subject_elements.append(_paste_element(l_rgb, l_a, x0, y0, size))
         centers.append((x0 + lw / 2.0, y0 + lh / 2.0))
 
-    # 2) Glow/burst — BEHIND the subject (50%).
+    # 2) Glow/burst — BEHIND the subject (50%). Held aside: its alpha is
+    # zeroed under the text bands below, BEFORE it joins the element list.
+    ray_el: tuple[np.ndarray, np.ndarray] | None = None
     if centers and rng.uniform() < RAY_PROB:
-        elements.append(_ray_layer(rng, size, centers[0]))
+        ray_el = _ray_layer(rng, size, centers[0])
     elements += subject_elements
 
     # 3) Small decorations.
@@ -670,9 +698,8 @@ def _render_design_sample(
         elements.append(decor)
 
     # 4) Display text blocks — top and/or bottom band.
-    n_text = 1 + (1 if rng.uniform() < SECOND_TEXT_PROB else 0)
-    bands = ["top", "bottom"] if n_text == 2 else (["top"] if rng.uniform() < 0.5 else ["bottom"])
-    for band in bands:
+    text_rects: list[tuple[int, int, int, int]] = []  # (x0, y0, x1, y1)
+    for band in _text_bands(rng):
         img = _fit_rgba(_text_block(rng, size, font_paths), max(1, int(0.9 * (w - 2 * m))),
                         max(1, int(0.28 * h)))
         tw, th = img.size
@@ -681,6 +708,16 @@ def _render_design_sample(
         jitter = int(rng.integers(0, max(1, int(0.08 * h))))
         y0 = m + jitter if band == "top" else max(m, h - m - th - jitter)
         elements.append(_rgba_to_element(img, x0, y0, size))
+        text_rects.append((x0, y0, x0 + tw, y0 + th))
+
+    # Glow must not run under display text (v8): glow alpha between letters
+    # entered the GT as "keep this semi-transparent", which the model
+    # reproduced on real designs as white residue between the letters of
+    # dense typography. Zeroing the glow inside the text rects keeps the
+    # RGB and the GT consistent (no glow pixels are composited there either).
+    if ray_el is not None:
+        _zero_alpha_in_rects(ray_el[1], text_rects, pad=max(2, int(0.015 * min(w, h))))
+        elements.insert(0, ray_el)
 
     # Composite + GT union (the edge band is zeroed in every element).
     out_rgb = bg.astype(np.float32)

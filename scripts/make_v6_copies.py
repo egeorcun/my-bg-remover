@@ -98,8 +98,9 @@ SOLID_MIN_RATIO = 0.08  # solid pixel ratio threshold (alpha > 0.9)
 SOFT_LO, SOFT_HI = 0.05, 0.95
 SOFT_MIN_RATIO = 0.08  # soft pixel ratio threshold (0.05 < alpha < 0.95)
 
-# Derivative suffixes: this script's own outputs (_eNN/_mNN) CANNOT be sources.
-_DERIVED_SUFFIX_RE = re.compile(r"_[em]\d{2}$")
+# Derivative suffixes: this script's outputs (_eNN/_mNN) and
+# make_bokeh_copies' outputs (_kNN) CANNOT be sources.
+_DERIVED_SUFFIX_RE = re.compile(r"_[emk]\d{2}$")
 # make_composites' original-background copies (_oNN) — preferred sources.
 _ORIGINAL_BG_SUFFIX_RE = re.compile(r"_o\d{2}$")
 # Categories that were never composited (original background always preserved) —

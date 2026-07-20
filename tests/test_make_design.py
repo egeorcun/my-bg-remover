@@ -158,6 +158,29 @@ def test_curved_text_arches_upward():
     assert mid < edges  # middle letters at the top of the arc (arch up)
 
 
+def test_ray_layer_has_compact_support():
+    """v8: the glow/burst alpha must be EXACTLY 0 far from its center. The
+    untruncated gaussian tail used to leave a faint non-zero alpha across the
+    whole canvas GT — the training signal behind the real-photo background
+    smears (HF discussion #1). Corner distance (~0.7*min) exceeds both the
+    2.5-sigma glow cutoff (<=0.45*min) and the max ray radius (0.55*min)."""
+    for seed in range(20):
+        rng = np.random.default_rng(seed)
+        _, a = md._ray_layer(rng, (200, 200), (100.0, 100.0))
+        assert a[0, 0] == 0.0 and a[0, -1] == 0.0 and a[-1, 0] == 0.0 and a[-1, -1] == 0.0
+        assert float(a.max()) > 0.0  # the element itself is non-empty
+
+
+def test_zero_alpha_in_rects_clears_text_band_only():
+    """v8: glow alpha under a text rect (grown by pad) is zeroed in place;
+    everything outside the grown rect is untouched."""
+    a = np.ones((50, 50), dtype=np.float32)
+    md._zero_alpha_in_rects(a, [(10, 10, 20, 20)], pad=2)
+    assert float(a[8:22, 8:22].max()) == 0.0
+    assert float(a[:8, :].min()) == 1.0 and float(a[22:, :].min()) == 1.0
+    assert float(a[:, :8].min()) == 1.0 and float(a[:, 22:].min()) == 1.0
+
+
 def test_curved_text_reaches_gt(env, monkeypatch):
     """In a composition where only text remains (subject/decor/glow disabled,
     curve forced), a non-zero GT means the curved text landed in the GT."""
