@@ -1,6 +1,6 @@
-"""CGM tarzı kenar rafinesi: modelin emin olamadığı bölgeleri kırpıp
-aynı modele yüksek efektif çözünürlükte yeniden sorar, sonucu yalnız
-belirsiz bantta feather'lı harmanlar.
+"""CGM-style edge refinement: crops the regions the model is uncertain about,
+re-queries the same model at a higher effective resolution, and blends the
+result back with feathering, only inside the uncertain band.
 """
 import numpy as np
 from PIL import Image
@@ -37,7 +37,7 @@ def refine_alpha(
 ) -> np.ndarray:
     if (image.size[1], image.size[0]) != alpha.shape:
         raise ValueError(
-            f"görsel boyutu {image.size[::-1]} alpha şekliyle {alpha.shape} uyuşmuyor"
+            f"image size {image.size[::-1]} does not match alpha shape {alpha.shape}"
         )
     h, w = alpha.shape
     band = (alpha > low) & (alpha < high)
@@ -49,7 +49,7 @@ def refine_alpha(
         xx0, xx1 = max(0, x0 - cx), min(w, x1 + cx)
         crop = rgb.crop((xx0, yy0, xx1, yy1))
         refined = segmenter.predict_alpha(crop)
-        # feather: bant maskesini yumuşat, yalnız bant içinde harmanla
+        # feather: soften the band mask, blend only inside the band
         local_band = band[yy0:yy1, xx0:xx1].astype(np.float32)
         weight = ndimage.gaussian_filter(local_band, 2).clip(0, 1)
         weight[local_band == 0] = 0.0

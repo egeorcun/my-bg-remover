@@ -21,28 +21,28 @@ def _metrics():
 
 def test_build_table_reports_improvement_and_regression():
     table = cv1.build_table(_metrics(), v1_models=["bgr-v1"], baseline_models=["birefnet-hr"])
-    assert "bgr-v1 vs baseline'lar" in table
-    # mae iyileşti (0.05 < 0.10) -> "iyi" işaretlenmeli
-    assert "iyi" in table
-    # sad kötüleşti (20.0 > 10.0) -> "kötü" işaretlenmeli
-    assert "kötü" in table
+    assert "bgr-v1 vs baselines" in table
+    # mae improved (0.05 < 0.10) -> must be marked "better"
+    assert "better" in table
+    # sad regressed (20.0 > 10.0) -> must be marked "worse"
+    assert "worse" in table
 
 
 def test_missing_v1_model_warns_without_crashing():
     table = cv1.build_table(_metrics(), v1_models=["bgr-v1", "bgr-v1+refine"], baseline_models=["birefnet-hr"])
     assert "bgr-v1+refine" in table
-    assert "UYARI" in table
-    assert "bulunamayan" in table
+    assert "WARNING" in table
+    assert "not found" in table
 
 
 def test_absent_baseline_skipped_gracefully():
     table = cv1.build_table(_metrics(), v1_models=["bgr-v1"], baseline_models=["ideogram"])
-    # ideogram metrics.json'da yok -> tablo yine üretilir, sadece o sütun olmadan
+    # ideogram is not in metrics.json -> the table is still generated, just without that column
     assert "ideogram" not in table
     assert "bgr-v1" in table
 
 
 def test_delta_cell_shows_baseline_value_and_direction():
-    assert "iyi" in cv1._delta_cell(0.05, 0.10)
-    assert "kötü" in cv1._delta_cell(0.10, 0.05)
+    assert "better" in cv1._delta_cell(0.05, 0.10)
+    assert "worse" in cv1._delta_cell(0.10, 0.05)
     assert cv1._delta_cell(0.10, 0.10).count("=") == 1

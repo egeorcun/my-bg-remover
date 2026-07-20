@@ -32,7 +32,7 @@ def test_run_benchmark_outputs_and_metrics(tmp_path):
     with patch("benchmark.run.get_segmenter", return_value=FakeSeg()):
         result = run_benchmark(["fake"], str(manifest), str(tmp_path / "out"))
     assert (tmp_path / "out/fake/a.png").exists()
-    assert result["per_image"]["fake"]["a"]["sad"] == 0.0  # tam isabet
+    assert result["per_image"]["fake"]["a"]["sad"] == 0.0  # perfect hit
     assert result["overall"]["fake"]["mae"] == 0.0
     assert (tmp_path / "out/metrics.json").exists()
 
@@ -53,7 +53,7 @@ def test_resume_skips_existing_outputs(tmp_path):
         run_benchmark(["fake"], str(manifest), str(tmp_path / "out"))
         first = (tmp_path / "out/metrics.json").read_text()
         run_benchmark(["fake"], str(manifest), str(tmp_path / "out"))
-    assert spy.calls == 1  # ikinci koşu var olan PNG'yi yeniden üretmez
+    assert spy.calls == 1  # the second run does not regenerate the existing PNG
     assert (tmp_path / "out/metrics.json").read_text() == first
 
 
@@ -88,7 +88,7 @@ def test_rgba_flag_produces_decontaminated_output(tmp_path):
         assert img.mode == "RGBA"
     assert mock_decon.call_count == 1
 
-    # idempotent: ikinci koşuda decontaminate tekrar çağrılmaz (segmenter da çağrılmaz)
+    # idempotent: on the second run decontaminate is not called again (nor is the segmenter)
     with patch("benchmark.run.get_segmenter", return_value=FakeSeg()), \
          patch("benchmark.run.decontaminate", return_value=fake_rgba) as mock_decon2:
         run_benchmark(["fake"], str(manifest), str(tmp_path / "out"), rgba=True)
@@ -114,4 +114,4 @@ def test_gtless_row_gets_alpha_but_no_metrics(tmp_path):
         result = run_benchmark(["fake"], str(manifest), str(tmp_path / "out"))
     assert (tmp_path / "out/fake/a.png").exists()
     assert (tmp_path / "out/fake/b.png").exists()
-    assert set(result["per_image"]["fake"]) == {"a"}  # GT'siz satıra metrik yok
+    assert set(result["per_image"]["fake"]) == {"a"}  # no metrics for the GT-less row

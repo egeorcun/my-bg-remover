@@ -1,7 +1,7 @@
-"""Segmenter arayüzü ve BiRefNet ailesi implementasyonu.
+"""Segmenter interface and the BiRefNet-family implementation.
 
-Sözleşme: predict_alpha(PIL.Image) -> np.float32 (H, W), [0, 1],
-giriş görseliyle aynı çözünürlükte.
+Contract: predict_alpha(PIL.Image) -> np.float32 (H, W), [0, 1],
+at the same resolution as the input image.
 """
 from abc import ABC, abstractmethod
 
@@ -23,7 +23,7 @@ class Segmenter(ABC):
 
 
 class BiRefNetSegmenter(Segmenter):
-    """BiRefNet mimarisi tabanlı tüm HF modelleri (BiRefNet_HR, RMBG-2.0...)."""
+    """All HF models built on the BiRefNet architecture (BiRefNet_HR, RMBG-2.0...)."""
 
     def __init__(self, model_id: str, input_size: int, name: str):
         from transformers import AutoModelForImageSegmentation
@@ -53,18 +53,19 @@ class BiRefNetSegmenter(Segmenter):
 
 
 class LocalBiRefNetSegmenter(BiRefNetSegmenter):
-    """Kendi fine-tune checkpoint'imizle yüklenen BiRefNet.
+    """BiRefNet loaded with our own fine-tuned checkpoint.
 
-    Mimari `arch_id`'den (HF, `trust_remote_code=True`) kurulur — bu yalnızca
-    doğru sınıfı/kodu getirmek için bir başlangıç noktası; ağırlıklar hemen
-    ardından `ckpt_path`'teki kendi checkpoint'imizle TAMAMEN override edilir.
+    The architecture is built from `arch_id` (HF, `trust_remote_code=True`) —
+    that is only a starting point to fetch the right class/code; the weights
+    are then COMPLETELY overridden with our own checkpoint at `ckpt_path`.
 
-    Checkpoint formatı: `training/train_colab.ipynb`'nin
-    `save_and_sync_checkpoint`'i — `torch.save({"model": state_dict,
-    "optimizer": ..., "lr_scheduler": ..., "epoch": int}, path)`. `state_dict`
-    `torch.compile` altında eğitildiyse `_orig_mod.` önekli olabilir (resmi
-    BiRefNet `train.py` ile aynı davranış: önek KALDIRILMADAN kaydedilir,
-    yükleme sırasında temizlenir — bkz. `utils.check_state_dict`).
+    Checkpoint format: `save_and_sync_checkpoint` in
+    `training/train_colab.ipynb` — `torch.save({"model": state_dict,
+    "optimizer": ..., "lr_scheduler": ..., "epoch": int}, path)`. If the
+    `state_dict` was trained under `torch.compile` its keys may carry the
+    `_orig_mod.` prefix (same behavior as the official BiRefNet `train.py`:
+    the prefix is saved WITHOUT being stripped and cleaned up at load time —
+    see `utils.check_state_dict`).
     """
 
     def __init__(
@@ -78,8 +79,8 @@ class LocalBiRefNetSegmenter(BiRefNetSegmenter):
         payload = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         if "model" not in payload:
             raise KeyError(
-                f"checkpoint'te 'model' anahtarı yok ({ckpt_path}); "
-                f"bulunan anahtarlar: {sorted(payload.keys())}"
+                f"checkpoint has no 'model' key ({ckpt_path}); "
+                f"keys found: {sorted(payload.keys())}"
             )
         state_dict = payload["model"]
         if any(k.startswith("_orig_mod.") for k in state_dict):
@@ -91,23 +92,24 @@ class LocalBiRefNetSegmenter(BiRefNetSegmenter):
         except RuntimeError as e:
             diff = self.model.load_state_dict(state_dict, strict=False)
             raise RuntimeError(
-                "strict load_state_dict başarısız: checkpoint mimariyle TAM "
-                "eşleşmiyor (sessiz kısmi yükleme YAPILMADI).\n"
-                f"  eksik anahtarlar ({len(diff.missing_keys)}): {diff.missing_keys}\n"
-                f"  fazla anahtarlar ({len(diff.unexpected_keys)}): {diff.unexpected_keys}\n"
+                "strict load_state_dict failed: the checkpoint does not FULLY "
+                "match the architecture (NO silent partial load was performed).\n"
+                f"  missing keys ({len(diff.missing_keys)}): {diff.missing_keys}\n"
+                f"  unexpected keys ({len(diff.unexpected_keys)}): {diff.unexpected_keys}\n"
                 f"  checkpoint: {ckpt_path}, arch: {arch_id}"
             ) from e
         self.model.to(self.device).eval()
 
 
 class InSPyReNetSegmenter(Segmenter):
-    """InSPyReNet (ACCV 2022) — `transparent-background` paketi üzerinden.
+    """InSPyReNet (ACCV 2022) — via the `transparent-background` package.
 
-    Paket kendi ön/son işlemesini yapar; `process(..., type="map")` girdiyle
-    aynı boyutta gri tonlamalı alpha haritası döner. Alpha sözleşmesi diğer
-    segmenter'larla aynı: float32, (H, W), [0, 1], giriş çözünürlüğünde.
-    Cihaz: paket MPS'i resmi desteklemediği için CPU'ya sabitlenir (yavaş ama
-    deterministik; benchmark tek seferlik koşulduğundan kabul edilebilir)."""
+    The package does its own pre/post-processing; `process(..., type="map")`
+    returns a grayscale alpha map at the same size as the input. The alpha
+    contract matches the other segmenters: float32, (H, W), [0, 1], at input
+    resolution. Device: pinned to CPU because the package does not officially
+    support MPS (slow but deterministic; acceptable since the benchmark is a
+    one-off run)."""
 
     def __init__(self, name: str = "inspyrenet"):
         from transparent_background import Remover

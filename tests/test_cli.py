@@ -29,8 +29,8 @@ def test_remove_writes_rgba(tmp_path):
 
 
 def test_remove_does_not_double_wrap_pipeline(tmp_path):
-    """get_segmenter zaten refine'lı bir PipelineSegmenter döndürdüğünde,
-    --refine bayrağı CLI'da ikinci bir sarmalama yaratmamalı."""
+    """When get_segmenter already returns a refine-enabled PipelineSegmenter,
+    the --refine flag must not create a second wrapper in the CLI."""
     src = tmp_path / "in.jpg"
     Image.new("RGB", (16, 16), (10, 120, 200)).save(src)
     dst = tmp_path / "out.png"
@@ -40,7 +40,7 @@ def test_remove_does_not_double_wrap_pipeline(tmp_path):
         main(["remove", str(src), "-o", str(dst), "--refine", "--no-decontaminate"])
     out = Image.open(dst)
     assert out.mode == "RGBA" and out.size == (16, 16)
-    # tüm alpha 1.0 (tam emin) olduğu için refiner sıfır patch koşturur;
-    # çift sarmalanmışsa taban modele birden fazla çağrı gitmez ama
-    # ikinci bir refine katmanı ekstra maliyete/side effect'e yol açardı.
+    # since all alpha is 1.0 (fully confident) the refiner runs zero patches;
+    # double-wrapping would not send extra calls to the base model, but a
+    # second refine layer would add extra cost/side effects.
     assert fake.calls == 1

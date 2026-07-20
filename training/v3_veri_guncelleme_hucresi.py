@@ -1,66 +1,69 @@
-"""V3 VERİ GÜNCELLEME HÜCRESİ — taze bir (ÜCRETSİZ, CPU yeterli — GPU GEREKMEZ)
-Colab oturumunda, mevcut Drive veri setine (`bg-remover-data/TRAIN`) yalnız YENİ
-`_o00` (orijinal arka plan) kopyalarını ekler; v1/v2'nin ~28k'lik tam kompozit
-setini YENİDEN ÜRETMEZ (bkz. `scripts/make_composites.py` modül docstring'i "v3"
-notu — over-deletion'ın kalıcı olma nedeni camouflage dışındaki kategorilerin
-yalnız sentetik arka planlarda eğitilmesiydi; bu hücre her kategoriye orijinal
-arka planı koruyan 1'er ek kopya ekleyerek domain gap'i kapatır).
+"""V3 DATA UPDATE CELL — in a fresh (FREE, CPU is enough — NO GPU NEEDED)
+Colab session, adds ONLY the NEW `_o00` (original background) copies to the
+existing Drive dataset (`bg-remover-data/TRAIN`); it does NOT REGENERATE
+v1/v2's full ~28k composite set (see the "v3" note in the
+`scripts/make_composites.py` module docstring — the reason over-deletion was
+persistent is that categories other than camouflage were trained only on
+synthetic backgrounds; this cell closes the domain gap by adding one extra
+copy per category that preserves the original background).
 
-KAYNAK / ATIF: bu dosyanın env/manifest aşamaları (`report`, `stage0_env_
-sanity`, `_walk_dirs`, `discover_cod10k`, `discover_him2k_dirs`, `merge_him2k`,
-manifest inşası) `training/colab_devam_hucresi.py` dosyasından BİREBİR
-KOPYALANDI; "downloads" aşamasının ham-kaynak indirme mantığı
-(`_download_hf_parquet_pairs` — kümülatif sayaç stem'leri dahil, P3M zip
-çıkarımı, Transparent-460 `snapshot_download`'u, gdown ile COD10K/HIM2K,
-BG-20k arka plan havuzu) ise `training/prepare_data_colab.ipynb` hücre (c)
-[8-11] ve (e) [15]'ten (KANITLANMIŞ, canlı Faz 2 koşusunda çalışmış kod)
-replike edildi. Drift önleme için tek doğruluk kaynağı o dosyalardır — burada
-tekrar yazılmasının tek nedeni, bu hücrenin de `colab_devam_hucresi.py` gibi
-tek başına yapıştırılıp çalıştırılabilir olması gerekmesi, bir modül olarak
-import edilmemesi. export/drive_copy aşamaları v3'e özgü MERGE mantığıyla
-YENİDEN YAZILDI (aşağıya bakın).
+SOURCE / ATTRIBUTION: the env/manifest stages of this file (`report`,
+`stage0_env_sanity`, `_walk_dirs`, `discover_cod10k`, `discover_him2k_dirs`,
+`merge_him2k`, manifest construction) were COPIED VERBATIM from
+`training/colab_devam_hucresi.py`; the raw-source download logic of the
+"downloads" stage (`_download_hf_parquet_pairs` — including cumulative-counter
+stems, P3M zip extraction, the Transparent-460 `snapshot_download`,
+COD10K/HIM2K via gdown, the BG-20k background pool) was replicated from
+`training/prepare_data_colab.ipynb` cells (c) [8-11] and (e) [15] (PROVEN
+code that ran in the live Phase 2 run). To prevent drift, those files remain
+the single source of truth — the only reason it is rewritten here is that
+this cell, like `colab_devam_hucresi.py`, must be paste-and-run standalone
+rather than imported as a module. The export/drive_copy stages were REWRITTEN
+with v3-specific MERGE logic (see below).
 
-ÖN KOŞULLAR (canlı koşu dersi — TAZE bir VM'de ham veri YOKTUR, bu hücre
-hepsini kendisi indirir): yalnız repo `/content/my-bg-remover`'da klonlanmış
-ve `pip install -e .` yapılmış olmalı (üstteki importlar için). Drive bağlama
-(`drive.mount`) bu hücrenin KENDİ env aşamasında, DRIVE_ROOT'a dokunan her
-şeyden (durum raporlama, val_stems.json okuma, son merge) ÖNCE yapılır. Ham
-kaynaklar (dis5k/camo/p3m/trans460_train/cod10k/him2k + BG-20k arka plan
-havuzu) "downloads" aşamasında idempotent olarak indirilir; manifest bu ham
-verilerden DETERMİNİSTİK olarak yeniden inşa edilir, bu yüzden `data/train/
-manifest.jsonl`'deki `id`'ler önceki v1/v2 koşularıyla BİREBİR aynı çıkar
-(aynı kaynak veri + aynı `build_trainset.py` mantığı, aynı sıralama). Drive'da
-`bg-remover-data/TRAIN/{im,gt}` (v1/v2'nin tam kompozit çıktısı) ve
-`bg-remover-status/val_stems.json` (VAL bölünmesi) ZATEN mevcut olmalı.
+PREREQUISITES (lesson from the live run — a FRESH VM has NO raw data, this
+cell downloads all of it itself): only the repo must be cloned at
+`/content/my-bg-remover` with `pip install -e .` done (for the imports at the
+top). Mounting Drive (`drive.mount`) happens in this cell's OWN env stage,
+BEFORE anything that touches DRIVE_ROOT (status reporting, reading
+val_stems.json, the final merge). Raw sources (dis5k/camo/p3m/trans460_train/
+cod10k/him2k + the BG-20k background pool) are downloaded idempotently in the
+"downloads" stage; the manifest is rebuilt DETERMINISTICALLY from this raw
+data, so the `id`s in `data/train/manifest.jsonl` come out EXACTLY identical
+to the earlier v1/v2 runs (same source data + same `build_trainset.py` logic,
+same ordering). On Drive, `bg-remover-data/TRAIN/{im,gt}` (the full composite
+output of v1/v2) and `bg-remover-status/val_stems.json` (the VAL split) must
+ALREADY exist.
 
-FARK (v1/v2'nin `colab_devam_hucresi.py`'sinden):
-1. Stage 4'ten sonra Drive'daki `val_stems.json` okunur, VAL'e sızmaması gereken
-   KAYNAK id'ler türetilir (`_v<NN>`/`_o<NN>` son eki çıkarılarak — bkz.
-   `training.train_colab_lib.strip_composite_copy_suffix`) ve
-   `make_composites.run()`a `exclude_source_ids` olarak geçilir.
-2. Taze bir VM'de `data/train_composites/` (v1/v2'nin ~28k'lik tam kompozit
-   çıktısı) YOKTUR — onu yeniden üretmek saatler sürer. Bunun yerine `run()`un
-   `only_original_bg=True` bayrağıyla YALNIZ `_o00` seti, AYRI bir dizine
-   (`data/train_composites_o/`) üretilir (~14k civarı, hızlı — CPU'da bile
-   dakikalar mertebesinde, compose YOK yalnız augment).
-3. `export_birefnet.export()` bu AYRI (taze, boş) yerel dizine karşı çalıştığından
-   diskte yalnız `_o00` dosyaları oluşur (idempotent skip-existing zaten
-   `export_birefnet.py`'de var — burada ekstra bir şey gerekmez, kaynak manifest
-   zaten yalnız `_o00` satırları içeriyor).
-4. Drive'a kopyalama YALNIZ `TRAIN/` alt ağacının `shutil.copytree(...,
-   dirs_exist_ok=True)` MERGE'i (var olan `_v<NN>` dosyaları SİLİNMEZ/ÜZERİNE
-   YAZILMAZ, yalnız yeni `_o00` dosyaları eklenir; src kökündeki KISMİ — yalnız
-   _o00'lu — `stats.json` Drive'daki otoriter TAM stats.json'u ezmesin diye
-   KOPYALANMAZ) + kompozit manifest'in Drive kopyasına (`train_composites_
-   manifest.jsonl`) yalnız YENİ id'lerin APPEND edilmesi (tam üzerine yazma
-   DEĞİL — devam hücresinin `shutil.copy2` ile TAM üzerine yazması burada YANLIŞ
-   olurdu, Drive'daki dosya zaten v1/v2'nin tüm `_v<NN>` satırlarını içeriyor).
-   Bütünlük kontrolü: Drive TRAIN'deki dosya sayısının ARTIŞI, yerelde üretilen
-   ama Drive'da henüz olmayan `_o00` dosya sayısına birebir eşit olmalı.
+DIFFERENCES (from v1/v2's `colab_devam_hucresi.py`):
+1. After Stage 4, `val_stems.json` on Drive is read, the SOURCE ids that must
+   not leak into VAL are derived (by stripping the `_v<NN>`/`_o<NN>` suffix —
+   see `training.train_colab_lib.strip_composite_copy_suffix`) and passed to
+   `make_composites.run()` as `exclude_source_ids`.
+2. On a fresh VM, `data/train_composites/` (v1/v2's full ~28k composite
+   output) does NOT exist — regenerating it takes hours. Instead, using
+   `run()`'s `only_original_bg=True` flag, ONLY the `_o00` set is produced
+   into a SEPARATE directory (`data/train_composites_o/`) (~14k or so, fast —
+   a matter of minutes even on CPU, NO compose, only augment).
+3. Because `export_birefnet.export()` runs against this SEPARATE (fresh,
+   empty) local directory, only `_o00` files appear on disk (idempotent
+   skip-existing already exists in `export_birefnet.py` — nothing extra is
+   needed here, the source manifest already contains only `_o00` rows).
+4. Copying to Drive is ONLY a `shutil.copytree(..., dirs_exist_ok=True)`
+   MERGE of the `TRAIN/` subtree (existing `_v<NN>` files are NOT
+   DELETED/OVERWRITTEN, only new `_o00` files are added; the PARTIAL —
+   `_o00`-only — `stats.json` at the src root is NOT COPIED so it cannot
+   clobber the authoritative FULL stats.json on Drive) + APPENDING only the
+   NEW ids to the Drive copy of the composite manifest
+   (`train_composites_manifest.jsonl`) (NOT a full overwrite — the
+   continuation cell's full overwrite via `shutil.copy2` would be WRONG here,
+   the file on Drive already contains all of v1/v2's `_v<NN>` rows).
+   Integrity check: the INCREASE in the file count of Drive TRAIN must equal
+   exactly the number of locally produced `_o00` files not yet on Drive.
 
-Durum takibi `colab_devam_hucresi.py` ile AYNI mekanizma (`report()` ->
-`bg-remover-status/log.txt` + `status.json`) — aşamalar: env, downloads,
-manifest, composites_o, export, drive_copy, (bitişte) ALL.
+Status tracking is the SAME mechanism as `colab_devam_hucresi.py`
+(`report()` -> `bg-remover-status/log.txt` + `status.json`) — stages: env,
+downloads, manifest, composites_o, export, drive_copy, (at the end) ALL.
 """
 
 import io
@@ -74,15 +77,16 @@ from pathlib import Path
 
 import PIL.Image
 
-# Transparent-460/HIM2K'da 100MP+ görseller var; PIL'in 179MP "decompression
-# bomb" hata eşiğini aşabiliyor. Veri güvenilir akademik setlerden geldiği için
-# limit kaldırılıyor (bkz. colab_devam_hucresi.py aynı satır).
+# Transparent-460/HIM2K contain 100MP+ images; they can exceed PIL's 179MP
+# "decompression bomb" error threshold. Since the data comes from trusted
+# academic datasets, the limit is removed (see the same line in
+# colab_devam_hucresi.py).
 PIL.Image.MAX_IMAGE_PIXELS = None
 
-import numpy as np  # noqa: E402  (MAX_IMAGE_PIXELS PIL importundan/atamasından SONRA gelmeli)
+import numpy as np  # noqa: E402  (MAX_IMAGE_PIXELS must come AFTER the PIL import/assignment)
 from PIL import Image  # noqa: E402
 
-# --- Sabitler (colab_devam_hucresi.py ile AYNI — bkz. o dosyanın "Sabitler" bölümü) ---
+# --- Constants (SAME as colab_devam_hucresi.py — see that file's "Constants" section) ---
 WORKDIR = "/content/my-bg-remover"
 DRIVE_ROOT = "/content/drive/MyDrive"
 DRIVE_OUTPUT_SUBDIR = "bg-remover-data"
@@ -95,19 +99,19 @@ LOG_PATH = STATUS_DIR / "log.txt"
 STATUS_PATH = STATUS_DIR / "status.json"
 VAL_STEMS_PATH = STATUS_DIR / "val_stems.json"
 
-# scripts/ bir paket değil — build_trainset/make_composites/export_birefnet'i
-# import edebilmek için mutlak yolu sys.path'e ekliyoruz (bkz. colab_devam_hucresi.py).
+# scripts/ is not a package — we add the absolute path to sys.path to be able
+# to import build_trainset/make_composites/export_birefnet (see colab_devam_hucresi.py).
 SCRIPTS_DIR = str(Path(WORKDIR) / "scripts")
 if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
 
-from benchmark.testset import append_entries, load_manifest  # noqa: E402  (pip install -e . ile kurulu paket)
-import training.train_colab_lib as tcl  # noqa: E402  (aynı pip install -e . -- torch-free, test edilebilir mantık)
+from benchmark.testset import append_entries, load_manifest  # noqa: E402  (package installed via pip install -e .)
+import training.train_colab_lib as tcl  # noqa: E402  (same pip install -e . -- torch-free, testable logic)
 
 
 # ==========================================================================
-# Durum raporlama — `colab_devam_hucresi.py::report`'la BİREBİR AYNI (kaynak:
-# training/colab_devam_hucresi.py, satır ~71).
+# Status reporting — EXACTLY IDENTICAL to `colab_devam_hucresi.py::report`
+# (source: training/colab_devam_hucresi.py, line ~71).
 # ==========================================================================
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -136,10 +140,11 @@ def report(stage: str, status: str, **extra) -> None:
 
 
 # ==========================================================================
-# Stage "env" — Drive bağlama + ortam sağlık kontrolü (kaynak:
-# colab_devam_hucresi.py::stage0_env_sanity + prepare_data_colab.ipynb hücre (a);
-# canlı koşu dersi: Drive bağlanmadan report()/val_stems.json/son merge'in
-# TAMAMI sessizce Drive'sız çalışıp en sonda patlıyordu — mount artık İLK iş).
+# Stage "env" — Drive mount + environment sanity check (source:
+# colab_devam_hucresi.py::stage0_env_sanity + prepare_data_colab.ipynb cell (a);
+# lesson from the live run: without Drive mounted, ALL of
+# report()/val_stems.json/the final merge silently ran without Drive and blew
+# up at the very end — mount is now the FIRST thing done).
 # ==========================================================================
 RAW_DIR_CHECKS = {
     "dis5k": "data/raw_train/dis5k/im",
@@ -166,21 +171,22 @@ def _setup_hf_env() -> None:
         token = userdata.get("HF_TOKEN")
         if token:
             os.environ["HF_TOKEN"] = token
-            print("HF_TOKEN Colab Secrets'tan alındı.")
+            print("HF_TOKEN obtained from Colab Secrets.")
     except Exception as e:
-        print(f"HF_TOKEN alınamadı (Secrets'ta yok veya erişim izni verilmedi): {e}")
+        print(f"Could not obtain HF_TOKEN (not in Secrets or access not granted): {e}")
 
 
 def stage0_env_sanity() -> dict:
-    # Drive HERŞEYDEN ÖNCE bağlanır (report() dahil — STATUS_DIR Drive'da!):
-    # canlı koşuda mount edilmemiş Drive yüzünden val_stems.json "bulunamadı"
-    # sanıldı ve son merge patlardı. drive.mount idempotenttir (zaten bağlıysa
-    # "already mounted" der, hata fırlatmaz). Kaynak: prepare_data_colab.ipynb
-    # hücre (a).
+    # Drive is mounted BEFORE EVERYTHING ELSE (including report() — STATUS_DIR
+    # lives on Drive!): in the live run, because Drive was not mounted,
+    # val_stems.json was mistakenly considered "not found" and the final merge
+    # would have blown up. drive.mount is idempotent (if already mounted it
+    # says "already mounted" and does not raise). Source:
+    # prepare_data_colab.ipynb cell (a).
     from google.colab import drive
 
     drive.mount("/content/drive")
-    assert Path(DRIVE_ROOT).is_dir(), f"Drive bağlanamadı: {DRIVE_ROOT} yok"
+    assert Path(DRIVE_ROOT).is_dir(), f"Could not mount Drive: {DRIVE_ROOT} does not exist"
 
     report("env", "running")
     os.chdir(WORKDIR)
@@ -188,29 +194,30 @@ def stage0_env_sanity() -> dict:
 
     counts = {name: _count_files(Path(rel)) for name, rel in RAW_DIR_CHECKS.items()}
     for name, c in counts.items():
-        print(f"{name}: {c} dosya")
+        print(f"{name}: {c} files")
     for name in ("dis5k", "camo", "p3m", "trans460_train", "cod10k_raw", "him2k_raw"):
         if counts[name] == 0:
-            print(f"NOT: {name} şu an boş — 'downloads' aşamasında indirilecek "
-                  f"(taze VM'de normal durum, bkz. modül docstring'i ÖN KOŞULLAR).")
+            print(f"NOTE: {name} is currently empty — it will be downloaded in the "
+                  f"'downloads' stage (normal on a fresh VM, see the module "
+                  f"docstring PREREQUISITES).")
 
     report("env", "done", cwd=str(Path.cwd()), counts=counts)
     return counts
 
 
 # ==========================================================================
-# Stage "downloads" — TÜM ham kaynaklar + arka plan havuzu, İDEMPOTENT.
-# Canlı koşu dersi: taze bir VM'de ham veri YOKTUR; bu aşama olmadan manifest
-# 0 çiftle kurulup pipeline export'ta patlıyordu. İndirme mantığı KANITLANMIŞ
-# koddan replike edildi:
-#   - HF parquet çiftleri (dis5k_tr/camo_tr, kümülatif sayaç stem'leri +
-#     bütünlük eşiği): prepare_data_colab.ipynb hücre (c)/9.
-#   - P3M zip + Transparent-460 snapshot: aynı notebook hücre (c)/10.
-#   - COD10K/HIM2K gdown: aynı notebook hücre (c)/11 (AM-2k BİLİNÇLİ atlanır:
-#     manifest onu hiç kullanmıyor — bkz. build_trainset.SOURCE_SPECS +
-#     cod10ktr/him2k; boşuna ~GB'lar indirmeyelim).
-#   - BG-20k arka plan havuzu: colab_devam_hucresi.py::stage1_bg_pool
-#     (kökeni prepare_data_colab.ipynb hücre (e)/15).
+# Stage "downloads" — ALL raw sources + background pool, IDEMPOTENT.
+# Lesson from the live run: a fresh VM has NO raw data; without this stage the
+# manifest was built with 0 pairs and the pipeline blew up at export. The
+# download logic was replicated from PROVEN code:
+#   - HF parquet pairs (dis5k_tr/camo_tr, cumulative-counter stems +
+#     integrity threshold): prepare_data_colab.ipynb cell (c)/9.
+#   - P3M zip + Transparent-460 snapshot: same notebook cell (c)/10.
+#   - COD10K/HIM2K gdown: same notebook cell (c)/11 (AM-2k is DELIBERATELY
+#     skipped: the manifest never uses it — see build_trainset.SOURCE_SPECS +
+#     cod10ktr/him2k; no point downloading ~GBs for nothing).
+#   - BG-20k background pool: colab_devam_hucresi.py::stage1_bg_pool
+#     (originating from prepare_data_colab.ipynb cell (e)/15).
 # ==========================================================================
 RAW = Path("data/raw_train")
 
@@ -221,8 +228,8 @@ def _load_source_defs() -> dict:
 
 
 def _sanitize_stem(name) -> str:
-    """Kaynak: prepare_data_colab.ipynb hücre 9 (_sanitize_stem) — parquet'teki
-    dosya adını güvenli stem'e çevirir."""
+    """Source: prepare_data_colab.ipynb cell 9 (_sanitize_stem) — converts the
+    file name in the parquet to a safe stem."""
     import re
 
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", Path(str(name)).stem)
@@ -230,12 +237,13 @@ def _sanitize_stem(name) -> str:
 
 def _download_hf_parquet_pairs(source_defs: dict, source_name: str, img_col: str,
                                mask_col: str, out_subdir: str) -> int:
-    """Kaynak: prepare_data_colab.ipynb hücre 9 — source_name'in TÜM parquet
-    parçalarını okuyup (image, mask) çiftlerini RAW/out_subdir/{im,gt}/ altına
-    yazar. Stem stratejisi (ÇAKIŞMA ÖNLEME): `image_name` kolonu varsa oradan;
-    yoksa TÜM parçalar boyunca artan KÜMÜLATİF sayaç — parça başına sıfırlanan
-    indeks 2. parçadan itibaren 1. parçanın stem'leriyle çakışıp satırların
-    sessizce atlanmasına yol açardı. İdempotent: var olan çiftler atlanır."""
+    """Source: prepare_data_colab.ipynb cell 9 — reads ALL parquet shards of
+    source_name and writes the (image, mask) pairs under RAW/out_subdir/{im,gt}/.
+    Stem strategy (COLLISION PREVENTION): from the `image_name` column if it
+    exists; otherwise a CUMULATIVE counter increasing across ALL shards — an
+    index reset per shard would, from the 2nd shard onward, collide with the
+    1st shard's stems and cause rows to be silently skipped. Idempotent:
+    existing pairs are skipped."""
     import pyarrow.parquet as pq
     from huggingface_hub import HfFileSystem
 
@@ -251,11 +259,11 @@ def _download_hf_parquet_pairs(source_defs: dict, source_name: str, img_col: str
         return cell_value["bytes"] if isinstance(cell_value, dict) else cell_value
 
     written = 0
-    counter = 0  # kümülatif satır sayacı — parça sınırlarında SIFIRLANMAZ
+    counter = 0  # cumulative row counter — NOT RESET at shard boundaries
     for pattern in spec["split_patterns"]:
         paths = fs.glob(f"datasets/{repo}/{pattern}")
         for p in sorted(paths):
-            print(f"  okunuyor: {p}")
+            print(f"  reading: {p}")
             with fs.open(p, "rb") as fh:
                 schema_names = pq.read_schema(fh).names
                 fh.seek(0)
@@ -271,7 +279,7 @@ def _download_hf_parquet_pairs(source_defs: dict, source_name: str, img_col: str
                 out_img_path = out_im / f"{stem}.jpg"
                 out_gt_path = out_gt / f"{stem}.png"
                 if out_img_path.exists() and out_gt_path.exists():
-                    continue  # idempotent (sorted() -> stabil parça sırası, deterministik stem'ler)
+                    continue  # idempotent (sorted() -> stable shard order, deterministic stems)
                 img_bytes = _bytes_of(table[img_col][i].as_py())
                 mask_bytes = _bytes_of(table[mask_col][i].as_py())
                 Image.open(io.BytesIO(img_bytes)).convert("RGB").save(out_img_path, quality=95)
@@ -280,19 +288,20 @@ def _download_hf_parquet_pairs(source_defs: dict, source_name: str, img_col: str
 
     total_pairs = len(list(out_im.glob("*")))
     expected = spec.get("full_pair_count")
-    print(f"{source_name}: {written} yeni çift yazıldı; diskte toplam {total_pairs} (beklenen ~{expected})")
+    print(f"{source_name}: {written} new pairs written; {total_pairs} total on disk (expected ~{expected})")
     if expected and total_pairs < 0.9 * expected:
         raise RuntimeError(
-            f"{source_name}: diskte yalnız {total_pairs}/{expected} çift var (<%90) — "
-            f"stem çakışması, eksik parquet parçası veya değişen repo şeması olabilir."
+            f"{source_name}: only {total_pairs}/{expected} pairs on disk (<90%) — "
+            f"could be a stem collision, a missing parquet shard, or a changed repo schema."
         )
     return written
 
 
 def _download_p3m(source_defs: dict) -> int:
-    """Kaynak: prepare_data_colab.ipynb hücre 10 (P3M bölümü). İdempotent:
-    diskte zaten >= %90 çift varsa zip hiç indirilmez (hızlı atlama); değilse
-    hf_hub_download (kendi cache'iyle) + dosya bazlı target.exists() atlaması."""
+    """Source: prepare_data_colab.ipynb cell 10 (P3M section). Idempotent: if
+    >= 90% of the pairs are already on disk, the zip is never downloaded (fast
+    skip); otherwise hf_hub_download (with its own cache) + per-file
+    target.exists() skipping."""
     import zipfile
 
     from huggingface_hub import hf_hub_download
@@ -303,7 +312,7 @@ def _download_p3m(source_defs: dict) -> int:
     existing = len(list(p3m_out_im.iterdir())) if p3m_out_im.exists() else 0
     expected = spec.get("full_pair_count") or 0
     if expected and existing >= 0.9 * expected:
-        print(f"p3m: diskte zaten {existing} çift (>= %90 x {expected}); indirme atlanıyor.")
+        print(f"p3m: already {existing} pairs on disk (>= 90% x {expected}); skipping download.")
         return existing
 
     p3m_zip = hf_hub_download(repo_id=spec["hf_repo"], repo_type="dataset", filename="data/p3m10k.zip")
@@ -320,15 +329,15 @@ def _download_p3m(source_defs: dict) -> int:
             with zf.open(n) as src, open(target, "wb") as dst:
                 dst.write(src.read())
     total = len(list(p3m_out_im.iterdir()))
-    print(f"p3m_10k_train: {total} görsel -> {p3m_out_im.parent}")
+    print(f"p3m_10k_train: {total} images -> {p3m_out_im.parent}")
     return total
 
 
 def _download_trans460(source_defs: dict) -> int:
-    """Kaynak: prepare_data_colab.ipynb hücre 10 (Transparent-460 bölümü).
-    İdempotent EK: fg/ zaten >= %90 doluysa snapshot hiç çekilmez (orijinal
-    hücre her koşuda rmtree+copytree yapıyordu — taze VM'de fark yok, yeniden
-    koşuda gereksiz işi önler)."""
+    """Source: prepare_data_colab.ipynb cell 10 (Transparent-460 section).
+    Idempotency ADDITION: if fg/ is already >= 90% full, the snapshot is never
+    fetched (the original cell did rmtree+copytree on every run — no
+    difference on a fresh VM, but it avoids needless work on a re-run)."""
     from huggingface_hub import snapshot_download
 
     spec = source_defs["transparent_460_train"]
@@ -336,7 +345,7 @@ def _download_trans460(source_defs: dict) -> int:
     existing = len(list((trans_out / "fg").iterdir())) if (trans_out / "fg").exists() else 0
     expected = spec.get("full_pair_count") or 0
     if expected and existing >= 0.9 * expected:
-        print(f"trans460_train: diskte zaten {existing} görsel (>= %90 x {expected}); indirme atlanıyor.")
+        print(f"trans460_train: already {existing} images on disk (>= 90% x {expected}); skipping download.")
         return existing
 
     trans_dir = snapshot_download(repo_id=spec["hf_repo"], repo_type="dataset", allow_patterns=["Train/*"])
@@ -345,16 +354,17 @@ def _download_trans460(source_defs: dict) -> int:
     shutil.copytree(Path(trans_dir) / "Train" / "fg", trans_out / "fg")
     shutil.copytree(Path(trans_dir) / "Train" / "alpha", trans_out / "alpha")
     total = len(list((trans_out / "fg").iterdir()))
-    print(f"transparent_460_train: {total} görsel -> {trans_out}")
+    print(f"transparent_460_train: {total} images -> {trans_out}")
     return total
 
 
 def _gdown_extract(drive_id: str, out_dir: Path, label: str) -> bool:
-    """Kaynak: prepare_data_colab.ipynb hücre 11 — Drive id'sinden zip indirip
-    out_dir'e açar; başarısızlıkta False döner (pipeline'ı durdurmaz, çağıran
-    notla geçer). İdempotent EK: out_dir zaten doluysa indirme atlanır."""
+    """Source: prepare_data_colab.ipynb cell 11 — downloads a zip from the
+    Drive id and extracts it to out_dir; returns False on failure (does not
+    stop the pipeline, the caller proceeds with a note). Idempotency ADDITION:
+    if out_dir is already populated, the download is skipped."""
     if out_dir.exists() and any(out_dir.iterdir()):
-        print(f"{label}: {out_dir} zaten dolu; indirme atlanıyor.")
+        print(f"{label}: {out_dir} already populated; skipping download.")
         return True
     out_dir.mkdir(parents=True, exist_ok=True)
     zip_path = out_dir.parent / f"{out_dir.name}.zip"
@@ -366,17 +376,17 @@ def _gdown_extract(drive_id: str, out_dir: Path, label: str) -> bool:
 
         with zipfile.ZipFile(zip_path) as zf:
             zf.extractall(out_dir)
-        print(f"{label}: indirildi ve açıldı -> {out_dir}")
+        print(f"{label}: downloaded and extracted -> {out_dir}")
         return True
     except Exception as e:
-        print(f"UYARI: {label} indirilemedi ({e}) — bu kaynak ATLANACAK.")
+        print(f"WARNING: {label} could not be downloaded ({e}) — this source will be SKIPPED.")
         return False
 
 
 def _ensure_gdown() -> None:
-    """gdown pip ile kurulu değilse kurar (repo'nun dev bağımlılığı — `pip
-    install -e .` onu getirmez; prepare_data_colab.ipynb hücre 8'deki
-    `!pip install gdown -q` satırının paste-run eşdeğeri)."""
+    """Installs gdown if not already installed via pip (a dev dependency of
+    the repo — `pip install -e .` does not bring it; the paste-run equivalent
+    of the `!pip install gdown -q` line in prepare_data_colab.ipynb cell 8)."""
     try:
         import gdown  # noqa: F401
     except ImportError:
@@ -386,9 +396,9 @@ def _ensure_gdown() -> None:
 
 
 def _download_bg_pool(source_defs: dict) -> int:
-    """Kaynak: colab_devam_hucresi.py::stage1_bg_pool (kökeni prepare_data_
-    colab.ipynb hücre (e)/15) — BG-20k'dan BG_POOL_SIZE arka plan, kümülatif
-    sayaçla idempotent."""
+    """Source: colab_devam_hucresi.py::stage1_bg_pool (originating from
+    prepare_data_colab.ipynb cell (e)/15) — BG_POOL_SIZE backgrounds from
+    BG-20k, idempotent via a cumulative counter."""
     import pyarrow.parquet as pq
     from huggingface_hub import HfFileSystem
 
@@ -396,7 +406,7 @@ def _download_bg_pool(source_defs: dict) -> int:
     bg_dir.mkdir(parents=True, exist_ok=True)
     existing = len(list(bg_dir.iterdir()))
     if existing >= BG_POOL_SIZE:
-        print(f"data/backgrounds zaten {existing} görsel içeriyor (>= {BG_POOL_SIZE}); indirme atlanıyor.")
+        print(f"data/backgrounds already contains {existing} images (>= {BG_POOL_SIZE}); skipping download.")
         return existing
 
     bg_spec = source_defs["bg_20k"]
@@ -404,7 +414,7 @@ def _download_bg_pool(source_defs: dict) -> int:
     pattern = bg_spec["split_patterns"][0]
     parts = sorted(fs.glob(f"datasets/{bg_spec['hf_repo']}/{pattern}"))
 
-    written = existing  # KÜMÜLATİF sayaç — parça sınırlarında sıfırlanmaz
+    written = existing  # CUMULATIVE counter — not reset at shard boundaries
     for part in parts:
         if written >= BG_POOL_SIZE:
             break
@@ -423,7 +433,7 @@ def _download_bg_pool(source_defs: dict) -> int:
             im.save(out_path, format="JPEG", quality=88)
             written += 1
 
-    print(f"data/backgrounds: {written} arka plan görseli.")
+    print(f"data/backgrounds: {written} background images.")
     return written
 
 
@@ -433,35 +443,37 @@ def stage_downloads() -> dict:
     source_defs = _load_source_defs()
     results: dict = {}
 
-    # HF parquet çiftleri — kolon adları Faz 2'de doğrulandı (hücre 9 notu);
-    # tek kaynak çökerse diğerleri denenmeye devam eder (hücre 9'daki try/except
-    # deseni), eksik kalan kategori manifest'te atlanır + boş-manifest guard'ı
-    # en sonda toplam sıfırsa yüksek sesle durdurur.
+    # HF parquet pairs — column names were verified in Phase 2 (cell 9 note);
+    # if one source fails the others are still attempted (the try/except
+    # pattern from cell 9), a category left missing is skipped in the manifest
+    # + the empty-manifest guard at the very end stops loudly if the total is
+    # zero.
     try:
         results["dis5k"] = _download_hf_parquet_pairs(source_defs, "dis5k_tr", "image", "label", "dis5k")
     except Exception as e:
-        print(f"UYARI: dis5k_tr indirilemedi ({e}); data/raw_train/dis5k mevcutsa o kullanılacak.")
+        print(f"WARNING: dis5k_tr could not be downloaded ({e}); data/raw_train/dis5k will be used if present.")
         results["dis5k"] = -1
     try:
         results["camo"] = _download_hf_parquet_pairs(source_defs, "camo_tr", "image", "mask", "camo")
     except Exception as e:
-        print(f"UYARI: camo_tr indirilemedi ({e}); data/raw_train/camo mevcutsa o kullanılacak.")
+        print(f"WARNING: camo_tr could not be downloaded ({e}); data/raw_train/camo will be used if present.")
         results["camo"] = -1
 
     try:
         results["p3m"] = _download_p3m(source_defs)
     except Exception as e:
-        print(f"UYARI: p3m indirilemedi ({e}); mevcutsa diskteki kullanılacak.")
+        print(f"WARNING: p3m could not be downloaded ({e}); the on-disk copy will be used if present.")
         results["p3m"] = -1
     try:
         results["trans460"] = _download_trans460(source_defs)
     except Exception as e:
-        print(f"UYARI: transparent_460 indirilemedi ({e}); mevcutsa diskteki kullanılacak.")
+        print(f"WARNING: transparent_460 could not be downloaded ({e}); the on-disk copy will be used if present.")
         results["trans460"] = -1
 
-    # Google Drive kaynakları (gdown) — cod10k kamuflaj için önemli; him2k
-    # general kategorisi (opsiyonel ama v1/v2 verisi içeriyordu, indirilir).
-    # AM-2k BİLİNÇLİ atlanır: manifest onu kullanmıyor (bkz. aşama yorumu).
+    # Google Drive sources (gdown) — cod10k matters for camouflage; him2k is
+    # the general category (optional, but v1/v2 data included it, so it is
+    # downloaded). AM-2k is DELIBERATELY skipped: the manifest does not use it
+    # (see the stage comment).
     _ensure_gdown()
     results["cod10k"] = _gdown_extract(source_defs["cod10k_tr"]["drive_id"], RAW / "cod10k_raw", "COD10K-TR")
     results["him2k"] = _gdown_extract(source_defs["him2k"]["drive_id"], RAW / "him2k_raw", "HIM2K")
@@ -469,17 +481,17 @@ def stage_downloads() -> dict:
     results["backgrounds"] = _download_bg_pool(source_defs)
 
     counts = {name: _count_files(Path(rel)) for name, rel in RAW_DIR_CHECKS.items()}
-    print("İndirme sonrası dosya sayıları:", counts)
+    print("File counts after downloads:", counts)
     report("downloads", "done", results=results, counts=counts)
     return results
 
 
 # ==========================================================================
-# Stage "manifest" — COD10K/HIM2K keşif+birleştirme + tam manifest (kaynak:
+# Stage "manifest" — COD10K/HIM2K discovery+merge + full manifest (source:
 # colab_devam_hucresi.py::{discover_cod10k, stage2_discover_structure,
 # discover_him2k_dirs, merge_him2k, stage3_merge_him2k, stage4_build_manifest}).
-# Tek bir report("manifest", ...) çifti altında toplanır (görev madde: report()
-# aşamaları env/downloads/manifest/composites_o/export/drive_copy/ALL).
+# Grouped under a single report("manifest", ...) pair (task item: report()
+# stages are env/downloads/manifest/composites_o/export/drive_copy/ALL).
 # ==========================================================================
 def _walk_dirs(root: Path, max_depth: int = 4) -> list[dict]:
     root = Path(root)
@@ -611,47 +623,47 @@ def merge_him2k(images_dir: Path, alphas_dir: Path, out_root: Path) -> int:
 
 
 def stage_manifest() -> dict:
-    """COD10K keşfi + HIM2K birleştirme + tam manifest inşası — TEK bir
-    `report("manifest", ...)` çifti altında (bkz. modül docstring'i)."""
+    """COD10K discovery + HIM2K merge + full manifest construction — under a
+    SINGLE `report("manifest", ...)` pair (see the module docstring)."""
     report("manifest", "running")
-    import build_trainset as bt  # scripts/ sys.path'te
+    import build_trainset as bt  # scripts/ is on sys.path
 
-    # --- COD10K keşfi (kaynak: stage2_discover_structure) ---
+    # --- COD10K discovery (source: stage2_discover_structure) ---
     cod_raw_dir = Path("data/raw_train/cod10k_raw")
     cod10k_info = None
     if cod_raw_dir.exists():
         cod10k_info = discover_cod10k(cod_raw_dir)
         if cod10k_info:
-            print(f"COD10K seçilen çift: img={cod10k_info['img_dir']}  gt={cod10k_info['gt_dir']}  "
-                  f"örtüşen stem={cod10k_info['overlap']}  belirsiz={cod10k_info['ambiguous']}")
+            print(f"COD10K selected pair: img={cod10k_info['img_dir']}  gt={cod10k_info['gt_dir']}  "
+                  f"overlapping stems={cod10k_info['overlap']}  ambiguous={cod10k_info['ambiguous']}")
         else:
-            print("COD10K için örtüşen img/gt dizin çifti bulunamadı.")
+            print("No overlapping img/gt directory pair found for COD10K.")
     else:
-        print("data/raw_train/cod10k_raw yok — COD10K atlanıyor.")
+        print("data/raw_train/cod10k_raw does not exist — skipping COD10K.")
 
-    # --- HIM2K birleştirme (kaynak: stage3_merge_him2k) ---
+    # --- HIM2K merge (source: stage3_merge_him2k) ---
     him2k_raw_dir = Path("data/raw_train/him2k_raw")
     him2k_count = 0
     if him2k_raw_dir.exists():
         dirs = discover_him2k_dirs(him2k_raw_dir)
         if dirs is None:
-            print("HIM2K images/alphas dizin çifti bulunamadı — atlanıyor.")
+            print("HIM2K images/alphas directory pair not found — skipping.")
         else:
             images_dir, alphas_dir = dirs
             out_root = Path("data/raw_train/him2k_merged")
             existing_gt = len(list((out_root / "gt").iterdir())) if (out_root / "gt").exists() else 0
             existing_im = len(list((out_root / "im").iterdir())) if (out_root / "im").exists() else 0
             if existing_gt > 0 and existing_gt == existing_im:
-                print(f"data/raw_train/him2k_merged zaten {existing_gt} çift içeriyor; birleştirme atlanıyor.")
+                print(f"data/raw_train/him2k_merged already contains {existing_gt} pairs; skipping merge.")
                 him2k_count = existing_gt
             else:
                 him2k_count = merge_him2k(images_dir, alphas_dir, out_root)
-                print(f"HIM2K birleştirildi: {him2k_count} çift -> {out_root}")
+                print(f"HIM2K merged: {him2k_count} pairs -> {out_root}")
     else:
-        print("data/raw_train/him2k_raw yok — HIM2K atlanıyor (general kategorisi opsiyonel).")
+        print("data/raw_train/him2k_raw does not exist — skipping HIM2K (the general category is optional).")
 
-    # --- Tam manifest (kaynak: stage4_build_manifest) — DETERMİNİSTİK: aynı ham
-    # veri + aynı build_trainset.py mantığı -> v1/v2 ile BİREBİR aynı id'ler. ---
+    # --- Full manifest (source: stage4_build_manifest) — DETERMINISTIC: same
+    # raw data + same build_trainset.py logic -> ids EXACTLY identical to v1/v2. ---
     if bt.MANIFEST.exists():
         bt.MANIFEST.unlink()
     for d in (bt.OUT_IMG, bt.OUT_GT):
@@ -665,7 +677,7 @@ def stage_manifest() -> dict:
         rows = bt.sample_source(name, img_glob, gt_glob, category, n=None, copy=True, **kw)
         append_entries(str(bt.MANIFEST), rows)
         counts[name] = len(rows)
-        print(f"{name} ({category}): {len(rows)} çift")
+        print(f"{name} ({category}): {len(rows)} pairs")
         return len(rows)
 
     for name, spec in bt.SOURCE_SPECS.items():
@@ -680,7 +692,7 @@ def stage_manifest() -> dict:
         dis_counts[r["category"]] = dis_counts.get(r["category"], 0) + 1
     counts["dis5ktr"] = dis_counts
     for category, c in sorted(dis_counts.items()):
-        print(f"dis5ktr ({category}): {c} çift")
+        print(f"dis5ktr ({category}): {c} pairs")
 
     if cod10k_info:
         root = Path(bt.ROOT).resolve()
@@ -696,44 +708,47 @@ def stage_manifest() -> dict:
         _run("cod10ktr", img_glob, gt_glob, "camouflage")
     else:
         counts["cod10ktr"] = 0
-        print("cod10ktr: atlandı (dizin bulunamadı)")
+        print("cod10ktr: skipped (directory not found)")
 
     if him2k_count > 0:
         _run("him2k", "data/raw_train/him2k_merged/im/*", "data/raw_train/him2k_merged/gt/*", "general")
     else:
         counts["him2k"] = 0
-        print("him2k: atlandı (birleştirme yapılamadı)")
+        print("him2k: skipped (merge could not be performed)")
 
-    # --- YÜKSEK SESLİ GUARD (canlı koşu dersi): manifest 0 çiftle kurulursa
-    # ASLA devam etme — bu koşuda export'un FileNotFoundError'ı yalnız SEMPTOMDU,
-    # neden boş manifest'ti. tcl.ensure_manifest_pairs dosya yoksa/boşsa net
-    # Türkçe mesajlı RuntimeError fırlatır (torch-free, birim testli). ---
+    # --- LOUD GUARD (lesson from the live run): if the manifest is built with
+    # 0 pairs, NEVER continue — in that run, the export's FileNotFoundError was
+    # only a SYMPTOM, the cause was an empty manifest. tcl.ensure_manifest_pairs
+    # raises a RuntimeError with a clear message if the file is missing/empty
+    # (torch-free, unit-tested). ---
     total_pairs = tcl.ensure_manifest_pairs(bt.MANIFEST)
-    print(f"Manifest guard: {total_pairs} GT'li çift — devam ediliyor.")
+    print(f"Manifest guard: {total_pairs} pairs with GT — continuing.")
 
     report("manifest", "done", counts=counts, total_pairs=total_pairs)
     return counts
 
 
 # ==========================================================================
-# Stage "composites_o" — YENİ (v3'e özgü): yalnız _o00 (orijinal arka plan)
-# kopyalarını, VAL'e sızmayacak şekilde üretir (bkz. modül docstring'i madde 1-2).
-# Kaynak id türetme mantığı (`strip_composite_copy_suffix`/
-# `derive_val_excluded_source_ids`) `training.train_colab_lib`de (torch-free,
-# birim testli) — bkz. o modülün "7) v3" bölümü.
+# Stage "composites_o" — NEW (v3-specific): produces only the _o00 (original
+# background) copies, in a way that cannot leak into VAL (see the module
+# docstring, items 1-2). The source-id derivation logic
+# (`strip_composite_copy_suffix`/`derive_val_excluded_source_ids`) lives in
+# `training.train_colab_lib` (torch-free, unit-tested) — see that module's
+# "7) v3" section.
 # ==========================================================================
 def load_val_excluded_source_ids(val_stems_path: Path) -> tuple[set[str], list[str]]:
-    """Drive'daki `val_stems.json`ı (`tcl.load_or_create_val_split`in yazdığı
-    `{"val_stems": [...]}` formatı) okuyup `tcl.derive_val_excluded_source_ids`
-    ile `(kaynak id kümesi, eşleşmeyen stem listesi)` çiftine çevirir — kaynak
-    id'ler `_o00` üretiminden hariç tutulur (VAL sızıntı koruması, bkz. görev
-    "VAL leakage guard"); eşleşmeyen stem'ler için koruma BAYPAS edilmiş olur
-    (bkz. `tcl.strip_composite_copy_suffix` docstring'i), çağıran uyarmalı."""
+    """Reads `val_stems.json` from Drive (the `{"val_stems": [...]}` format
+    written by `tcl.load_or_create_val_split`) and converts it via
+    `tcl.derive_val_excluded_source_ids` into a `(source id set, unmatched
+    stem list)` pair — the source ids are excluded from `_o00` production
+    (VAL leak guard, see the task item "VAL leakage guard"); for the unmatched
+    stems the guard is effectively BYPASSED (see the
+    `tcl.strip_composite_copy_suffix` docstring), the caller should warn."""
     if not val_stems_path.exists():
-        print(f"UYARI: {val_stems_path} bulunamadı — hiçbir kaynak hariç tutulmuyor "
-              f"(VAL bölünmesi henüz yapılmamış olabilir; bu durumda _o00 üretimi TÜM "
-              f"kategorilere uygulanır, sızıntı riski yalnız VAL_HOLDOUT'un ZATEN "
-              f"var olduğu normal senaryoda geçerlidir).")
+        print(f"WARNING: {val_stems_path} not found — no sources are being excluded "
+              f"(the VAL split may not have been made yet; in that case _o00 production "
+              f"is applied to ALL categories, and the leak risk only applies in the "
+              f"normal scenario where VAL_HOLDOUT ALREADY exists).")
         return set(), []
     payload = json.loads(val_stems_path.read_text())
     return tcl.derive_val_excluded_source_ids(payload.get("val_stems", []))
@@ -741,17 +756,17 @@ def load_val_excluded_source_ids(val_stems_path: Path) -> tuple[set[str], list[s
 
 def stage_composites_o() -> dict:
     report("composites_o", "running")
-    import make_composites as mc  # scripts/ sys.path'te
+    import make_composites as mc  # scripts/ is on sys.path
 
     excluded, unmatched = load_val_excluded_source_ids(VAL_STEMS_PATH)
-    print(f"VAL sızıntı koruması: {len(excluded)} kaynak id _o00 üretiminden hariç tutuluyor.")
+    print(f"VAL leak guard: {len(excluded)} source ids excluded from _o00 production.")
     if unmatched:
         print("=" * 72)
-        print(f"!!! UYARI — VAL SIZINTI KORUMASI KISMEN BAYPAS: {len(unmatched)} val stem'i "
-              f"_v<NN>/_o<NN> son ek deseniyle EŞLEŞMEDİ. Bu stem'lerin ASIL kaynak "
-              f"id'leri hariç tutulaMADI — o kaynakların _o00 kopyaları eğitim setine "
-              f"üretilecek ve aynı görsel hem TRAIN hem VAL'de görülecek (sızıntı). "
-              f"İlk 10 eşleşmeyen stem: {unmatched[:10]}")
+        print(f"!!! WARNING — VAL LEAK GUARD PARTIALLY BYPASSED: {len(unmatched)} val stems "
+              f"did NOT MATCH the _v<NN>/_o<NN> suffix pattern. The TRUE source ids of "
+              f"these stems could NOT be excluded — the _o00 copies of those sources "
+              f"will be produced into the training set and the same image will be seen "
+              f"in both TRAIN and VAL (leak). First 10 unmatched stems: {unmatched[:10]}")
         print("=" * 72)
         report("composites_o", "warning", unmatched_val_stems=len(unmatched), sample=unmatched[:10])
 
@@ -764,11 +779,11 @@ def stage_composites_o() -> dict:
         exclude_source_ids=excluded,
         only_original_bg=True,
     )
-    print("Kategori bazlı üretilen _o00 sayısı:", counts)
+    print("Per-category _o00 counts produced:", counts)
 
-    # Bütünlük: beklenen toplam = (NO_COMPOSE_CATEGORIES dışı + gt_alpha'lı +
-    # hariç tutulmamış) kaynak satır sayısı x ORIGINAL_BG_COPIES (formül, rapora
-    # da yazılır).
+    # Integrity: expected total = (source rows outside NO_COMPOSE_CATEGORIES +
+    # with gt_alpha + not excluded) x ORIGINAL_BG_COPIES (the formula is also
+    # written to the report).
     source_rows = load_manifest("data/train/manifest.jsonl")
     eligible = [
         r for r in source_rows
@@ -778,11 +793,11 @@ def stage_composites_o() -> dict:
 
     out_manifest = Path("data/train_composites_o/manifest.jsonl")
     actual_total = len(load_manifest(str(out_manifest))) if out_manifest.exists() else 0
-    print(f"composites_o bütünlük: beklenen={expected_total}, gerçek={actual_total} "
-          f"(kaynak satır x ORIGINAL_BG_COPIES={mc.ORIGINAL_BG_COPIES}).")
+    print(f"composites_o integrity: expected={expected_total}, actual={actual_total} "
+          f"(source rows x ORIGINAL_BG_COPIES={mc.ORIGINAL_BG_COPIES}).")
     assert actual_total == expected_total, (
-        f"composites_o manifest toplamı beklenenle uyuşmuyor: {actual_total} != {expected_total} "
-        f"— make_composites.run() mantığı veya exclude_source_ids kontrol edilmeli."
+        f"composites_o manifest total does not match the expectation: {actual_total} != {expected_total} "
+        f"— the make_composites.run() logic or exclude_source_ids should be checked."
     )
 
     report("composites_o", "done", counts=counts, expected_total=expected_total, actual_total=actual_total)
@@ -790,13 +805,14 @@ def stage_composites_o() -> dict:
 
 
 # ==========================================================================
-# Stage "export" — YENİ (v3'e özgü, ama export_birefnet.export() DEĞİŞMEDİ):
-# taze/boş bir yerel dizine karşı çalıştığından diskte yalnız _o00 dosyaları
-# oluşur (kaynak manifest zaten yalnız _o00 satırları içeriyor).
+# Stage "export" — NEW (v3-specific, but export_birefnet.export() is
+# UNCHANGED): because it runs against a fresh/empty local directory, only
+# _o00 files appear on disk (the source manifest already contains only _o00
+# rows).
 # ==========================================================================
 def stage_export_o() -> dict:
     report("export", "running")
-    import export_birefnet as eb  # scripts/ sys.path'te
+    import export_birefnet as eb  # scripts/ is on sys.path
 
     stats = eb.export(
         manifest_path="data/train_composites_o/manifest.jsonl",
@@ -809,10 +825,11 @@ def stage_export_o() -> dict:
 
 
 # ==========================================================================
-# Stage "drive_copy" — YENİ (v3'e özgü): var olan Drive TRAIN'e MERGE (dirs_
-# exist_ok=True, hiçbir dosya SİLİNMEZ) + kompozit manifest'e APPEND (dedupe'lu,
-# tam üzerine yazma YOK — devam hücresinden en büyük fark budur). Merge mantığı
-# `tcl.merge_composite_manifest`de (torch-free, birim testli).
+# Stage "drive_copy" — NEW (v3-specific): MERGE into the existing Drive TRAIN
+# (dirs_exist_ok=True, NO file is DELETED) + APPEND to the composite manifest
+# (deduped, NO full overwrite — this is the biggest difference from the
+# continuation cell). The merge logic lives in `tcl.merge_composite_manifest`
+# (torch-free, unit-tested).
 # ==========================================================================
 def stage_drive_copy_o() -> None:
     report("drive_copy", "running")
@@ -821,9 +838,9 @@ def stage_drive_copy_o() -> None:
     dst_train_im = dst / "TRAIN" / "im"
     dst_train_gt = dst / "TRAIN" / "gt"
     assert dst_train_im.is_dir() and dst_train_gt.is_dir(), (
-        f"Drive'da beklenen v1/v2 TRAIN verisi bulunamadı: {dst_train_im} / {dst_train_gt} — "
-        f"bu hücre yalnız MEVCUT bir veri setine _o00 EKLEMEK içindir, sıfırdan veri seti "
-        f"oluşturmak için colab_devam_hucresi.py kullanılmalı."
+        f"Expected v1/v2 TRAIN data not found on Drive: {dst_train_im} / {dst_train_gt} — "
+        f"this cell is only for ADDING _o00 to an EXISTING dataset; to build a dataset "
+        f"from scratch, colab_devam_hucresi.py must be used."
     )
 
     src_im_files = list((src / "TRAIN" / "im").iterdir())
@@ -833,38 +850,38 @@ def stage_drive_copy_o() -> None:
     expected_growth = len(new_stems)
 
     pre_im, pre_gt = len(list(dst_train_im.iterdir())), len(list(dst_train_gt.iterdir()))
-    print(f"Merge öncesi Drive TRAIN: im={pre_im}, gt={pre_gt} — beklenen artış: {expected_growth}")
+    print(f"Drive TRAIN before merge: im={pre_im}, gt={pre_gt} — expected growth: {expected_growth}")
 
-    # YALNIZ TRAIN/ alt ağacı kopyalanır — src kökündeki stats.json BİLİNÇLİ
-    # OLARAK KOPYALANMAZ: export_birefnet.export() onu yalnız _o00 setinin
-    # KISMİ istatistikleriyle yazdı; Drive'daki stats.json ise v1/v2'nin TAM
-    # veri setinin otoriter istatistikleri — tüm src kökünü copytree'lemek
-    # onu sessizce EZERDİ (reviewer bulgusu #1).
-    print(f"Kopyalanıyor (MERGE, silme yok, yalnız TRAIN/): {src / 'TRAIN'} -> {dst / 'TRAIN'}")
+    # ONLY the TRAIN/ subtree is copied — the stats.json at the src root is
+    # DELIBERATELY NOT COPIED: export_birefnet.export() wrote it with only the
+    # PARTIAL statistics of the _o00 set; the stats.json on Drive is the
+    # authoritative statistics of v1/v2's FULL dataset — copytree'ing the
+    # entire src root would silently CLOBBER it (reviewer finding #1).
+    print(f"Copying (MERGE, no deletion, TRAIN/ only): {src / 'TRAIN'} -> {dst / 'TRAIN'}")
     shutil.copytree(src / "TRAIN", dst / "TRAIN", dirs_exist_ok=True)
 
     post_im, post_gt = len(list(dst_train_im.iterdir())), len(list(dst_train_gt.iterdir()))
-    print(f"Merge sonrası Drive TRAIN: im={post_im}, gt={post_gt}")
+    print(f"Drive TRAIN after merge: im={post_im}, gt={post_gt}")
 
     assert post_im - pre_im == expected_growth, (
-        f"im/ büyümesi beklenenle uyuşmuyor: {post_im - pre_im} != {expected_growth}"
+        f"im/ growth does not match the expectation: {post_im - pre_im} != {expected_growth}"
     )
     assert post_gt - pre_gt == expected_growth, (
-        f"gt/ büyümesi beklenenle uyuşmuyor: {post_gt - pre_gt} != {expected_growth}"
+        f"gt/ growth does not match the expectation: {post_gt - pre_gt} != {expected_growth}"
     )
-    assert len(src_im_files) == len(src_gt_files), "yerel _o00 export'unda im/gt sayıları uyuşmuyor!"
+    assert len(src_im_files) == len(src_gt_files), "im/gt counts do not match in the local _o00 export!"
 
     comp_manifest_local = Path("data/train_composites_o/manifest.jsonl")
     comp_manifest_drive = dst / "train_composites_manifest.jsonl"
     n_appended = tcl.merge_composite_manifest(comp_manifest_local, comp_manifest_drive)
-    print(f"train_composites_manifest.jsonl: {n_appended} yeni satır eklendi (Drive'daki mevcut "
-          f"v1/v2 satırları KORUNDU, üzerine yazılmadı).")
+    print(f"train_composites_manifest.jsonl: {n_appended} new rows appended (the existing "
+          f"v1/v2 rows on Drive were PRESERVED, not overwritten).")
     assert n_appended == expected_growth, (
-        f"manifest ekleme sayısı ({n_appended}) dosya büyümesiyle ({expected_growth}) tutarsız — "
-        f"stem/id eşlemesi kontrol edilmeli."
+        f"manifest append count ({n_appended}) is inconsistent with the file growth ({expected_growth}) — "
+        f"the stem/id mapping should be checked."
     )
 
-    print("\nBÜTÜNLÜK KONTROLÜ BAŞARILI — _o00 verisi Drive'a MERGE edildi.")
+    print("\nINTEGRITY CHECK PASSED — _o00 data was MERGED into Drive.")
     report(
         "drive_copy", "done",
         added_files=expected_growth, added_manifest_rows=n_appended,
@@ -873,12 +890,12 @@ def stage_drive_copy_o() -> None:
 
 
 # ==========================================================================
-# Orkestrasyon — üst düzeyde koşar (hücre yapıştırılıp çalıştırıldığında).
+# Orchestration — runs at top level (when the cell is pasted and executed).
 # ==========================================================================
 def main() -> None:
-    stage0_env_sanity()   # Drive mount BURADA — DRIVE_ROOT'a dokunan her şeyden önce
-    stage_downloads()     # taze VM: TÜM ham kaynaklar + arka plan havuzu (idempotent)
-    stage_manifest()      # sonunda tcl.ensure_manifest_pairs guard'ı (boşsa RuntimeError)
+    stage0_env_sanity()   # Drive mount happens HERE — before anything that touches DRIVE_ROOT
+    stage_downloads()     # fresh VM: ALL raw sources + background pool (idempotent)
+    stage_manifest()      # ends with the tcl.ensure_manifest_pairs guard (RuntimeError if empty)
     stage_composites_o()
     stage_export_o()
     stage_drive_copy_o()

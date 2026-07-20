@@ -62,7 +62,7 @@ def test_sample_source_links_resolve_to_original_files(fake_root):
         assert dst_g.is_symlink()
         assert dst_i.resolve().parent == fake_root["src_img"].resolve()
         assert dst_g.resolve().parent == fake_root["src_gt"].resolve()
-        # symlink içeriği okunabilir olmalı (kopya değil, gerçek dosyaya işaret eder)
+        # the symlink's content must be readable (not a copy; it points to the real file)
         Image.open(dst_i).verify()
 
 
@@ -76,8 +76,8 @@ def test_sample_source_writes_valid_manifest(fake_root):
 def test_duplicate_id_rejected_on_reload(fake_root):
     rows = bt.sample_source("fake", fake_root["img_glob"], fake_root["gt_glob"], "product", 2)
     append_entries(str(fake_root["manifest"]), rows)
-    append_entries(str(fake_root["manifest"]), rows)  # aynı id'ler tekrar eklendi
-    with pytest.raises(ValueError, match="tekrarlanan"):
+    append_entries(str(fake_root["manifest"]), rows)  # the same ids were added again
+    with pytest.raises(ValueError, match="duplicate"):
         load_manifest(str(fake_root["manifest"]))
 
 
@@ -122,9 +122,9 @@ def test_add_source_unknown_raises(fake_root):
 
 
 def test_sample_source_gt_stem_suffix_strips_before_pairing(tmp_path, monkeypatch):
-    """HIM2K gibi kaynaklarda GT dosyası '<stem>_matte.png', görsel '<stem>.jpg' —
-    varsayılan (birebir stem) eşleştirme bunu HİÇ yakalamaz (0 çift); gt_stem_suffix
-    ile GT stem'inden son ek atılıp eşleştirme kurulmalı."""
+    """In sources like HIM2K the GT file is '<stem>_matte.png', the image '<stem>.jpg' —
+    the default (exact stem) pairing NEVER catches this (0 pairs); with gt_stem_suffix
+    the suffix must be stripped from the GT stem and the pairing established."""
     src_img = tmp_path / "raw" / "im"
     src_gt = tmp_path / "raw" / "gt"
     src_img.mkdir(parents=True)
@@ -143,11 +143,11 @@ def test_sample_source_gt_stem_suffix_strips_before_pairing(tmp_path, monkeypatc
     monkeypatch.setattr(bt, "OUT_GT", out_gt)
     monkeypatch.setattr(bt, "MANIFEST", manifest)
 
-    # Varsayılan (gt_stem_suffix yok): 0 çift, çünkü "foo" != "foo_matte".
+    # Default (no gt_stem_suffix): 0 pairs, because "foo" != "foo_matte".
     rows_default = bt.sample_source("him2k", "raw/im/*", "raw/gt/*", "general")
     assert rows_default == []
 
-    # gt_stem_suffix="_matte": GT stem'inden son ek atılır, 2 çift eşleşir.
+    # gt_stem_suffix="_matte": the suffix is stripped from the GT stem, 2 pairs match.
     rows = bt.sample_source("him2k", "raw/im/*", "raw/gt/*", "general", gt_stem_suffix="_matte")
     assert len(rows) == 2
     for row in rows:
@@ -164,8 +164,8 @@ def test_sample_source_default_mode_uses_symlinks(fake_root):
 
 
 def test_sample_source_copy_mode_creates_real_files_not_symlinks(fake_root):
-    """Colab'da tam veri materyalizasyonu için --copy: symlink yerine gerçek dosya
-    (Drive'a taşıma/zip sırasında link kırılmaz)."""
+    """--copy for full data materialization on Colab: a real file instead of a
+    symlink (the link cannot break during the move/zip to Drive)."""
     rows = bt.sample_source(
         "fake", fake_root["img_glob"], fake_root["gt_glob"], "product", 2, copy=True
     )
@@ -216,22 +216,23 @@ def test_add_source_copy_mode_threads_through(fake_root, monkeypatch):
 
 
 def test_sources_derived_from_source_specs():
-    """SOURCES, tek doğruluk kaynağı SOURCE_SPECS'ten türetilmeli — Colab notebook'u
-    aynı tanımları n olmadan (tam set) kullanır; elle kopya/drift olmamalı."""
-    assert bt.SOURCES, "SOURCES boş olmamalı"
+    """SOURCES must be derived from the single source of truth SOURCE_SPECS — the
+    Colab notebook uses the same definitions without n (full set); no manual
+    copies/drift allowed."""
+    assert bt.SOURCES, "SOURCES must not be empty"
     for name, img_glob, gt_glob, category, n in bt.SOURCES:
         spec = bt.SOURCE_SPECS[name]
         assert spec["img_glob"] == img_glob
         assert spec["gt_glob"] == gt_glob
         assert spec["category"] == category
-        assert category != "disvd_tokens"  # token kuralı sample_source'a girmez
+        assert category != "disvd_tokens"  # the token rule never enters sample_source
         assert n == bt.LOCAL_SAMPLE_N[name]
 
 
 def test_source_specs_complete_and_dis5ktr_uses_token_rule():
     for name, spec in bt.SOURCE_SPECS.items():
         assert set(spec) == {"img_glob", "gt_glob", "category"}, name
-        assert name in bt.LOCAL_SAMPLE_N, f"{name}: LOCAL_SAMPLE_N eksik"
+        assert name in bt.LOCAL_SAMPLE_N, f"{name}: LOCAL_SAMPLE_N missing"
     assert bt.SOURCE_SPECS["dis5ktr"]["category"] == "disvd_tokens"
     assert bt.DIS5KTR_IMG_GLOB == bt.SOURCE_SPECS["dis5ktr"]["img_glob"]
     assert bt.DIS5KTR_GT_GLOB == bt.SOURCE_SPECS["dis5ktr"]["gt_glob"]

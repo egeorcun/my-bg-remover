@@ -1,7 +1,7 @@
-"""Matting kalite metrikleri.
+"""Matting quality metrics.
 
-Sözleşme: pred ve gt float32, (H, W), [0, 1]. SAD/Grad/Conn literatür
-geleneğiyle 1000'e bölünür (küçük okunur sayılar için).
+Contract: pred and gt are float32, (H, W), [0, 1]. Following the literature
+convention, SAD/Grad/Conn are divided by 1000 (for small, readable numbers).
 """
 import numpy as np
 from scipy import ndimage
@@ -9,7 +9,7 @@ from scipy import ndimage
 
 def _check(pred: np.ndarray, gt: np.ndarray) -> None:
     if pred.shape != gt.shape:
-        raise ValueError(f"shape uyuşmuyor: {pred.shape} vs {gt.shape}")
+        raise ValueError(f"shape mismatch: {pred.shape} vs {gt.shape}")
 
 
 def sad(pred: np.ndarray, gt: np.ndarray) -> float:
@@ -34,8 +34,8 @@ def _gauss_gradient(img: np.ndarray, sigma: float) -> np.ndarray:
 
 
 def grad_error(pred: np.ndarray, gt: np.ndarray, sigma: float = 1.4) -> float:
-    """scipy gaussian türevi kullanır; değerler kendi içinde tutarlıdır, MATLAB tabanlı
-    yayın sayılarıyla birebir karşılaştırılamaz."""
+    """Uses scipy's gaussian derivative; values are internally consistent but not
+    directly comparable to MATLAB-based published numbers."""
     _check(pred, gt)
     pred_g = _gauss_gradient(pred.astype(np.float64), sigma)
     gt_g = _gauss_gradient(gt.astype(np.float64), sigma)

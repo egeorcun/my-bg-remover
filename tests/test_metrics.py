@@ -18,7 +18,7 @@ def test_identical_alphas_give_zero(square_alpha):
 
 def test_sad_counts_absolute_difference(square_alpha):
     pred = square_alpha.copy()
-    pred[0, 0:10] = 0.5  # 10 piksel, 0.5 fark -> SAD = 5/1000
+    pred[0, 0:10] = 0.5  # 10 pixels, 0.5 difference -> SAD = 5/1000
     assert sad(pred, square_alpha) == pytest.approx(0.005)
 
 
@@ -38,7 +38,7 @@ def test_grad_penalizes_blurry_edges(square_alpha):
 
 def test_conn_penalizes_disconnected_blobs(square_alpha):
     disconnected = square_alpha.copy()
-    disconnected[5:10, 5:10] = 1.0  # ana kareden kopuk küçük blob
+    disconnected[5:10, 5:10] = 1.0  # small blob disconnected from the main square
     assert conn_error(disconnected, square_alpha) > 0
 
 

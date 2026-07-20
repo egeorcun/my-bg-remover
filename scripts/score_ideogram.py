@@ -1,22 +1,23 @@
-"""`results/ideogram/<id>.png` (fal.ai Ideogram remove-background RGBA çıktıları,
-bkz. `benchmark/ideogram.py`) için GT-karşılaştırmalı metrikleri hesaplar ve
-`results/baseline/metrics.json`'a `"ideogram"` model adıyla BİRLEŞTİRİR (merge).
+"""Computes GT-comparison metrics for `results/ideogram/<id>.png` (fal.ai Ideogram
+remove-background RGBA outputs, see `benchmark/ideogram.py`) and MERGES them into
+`results/baseline/metrics.json` under the model name `"ideogram"`.
 
-Ideogram, `bgr/registry.py` üzerinden çalışan bir segmenter DEĞİL (harici bir
-API'nin önceden indirilmiş çıktıları) — bu yüzden `benchmark.run.run_benchmark`
-akışına giremiyor; bu betik onun YERİNE, aynı metrik/birleştirme sözleşmesini
-kullanarak (`benchmark.run._load_alpha` / `_merge_metrics` — İTHAL EDİLİR,
-KOPYALANMAZ, tek doğruluk kaynağı ilkesi) yalnız ideogram için aynı işi yapar.
-`scripts/compare_v1.py`'nin varsayılan `--baselines` listesi zaten `ideogram`'ı
-içeriyor (yalnız `metrics.json`'da fiilen bulunuyorsa gösterilir) — bu betik
-koştuktan sonra ideogram karşılaştırma tablosunda otomatik belirir.
+Ideogram is NOT a segmenter running through `bgr/registry.py` (it is the
+pre-downloaded output of an external API) — so it cannot enter the
+`benchmark.run.run_benchmark` flow; this script does the same job for ideogram
+only, IN ITS PLACE, using the same metric/merge contract
+(`benchmark.run._load_alpha` / `_merge_metrics` — IMPORTED, NOT COPIED, single
+source of truth principle). `scripts/compare_v1.py`'s default `--baselines` list
+already includes `ideogram` (shown only if actually present in `metrics.json`) —
+after this script runs, ideogram automatically appears in the comparison table.
 
-Manifest'teki `gt_alpha` alanı boş olan (piksel-GT'siz) satırlar atlanır (GT'siz
-metrik hesaplanamaz — mevcut `benchmark.run` sözleşmesiyle aynı). Manifest'te
-GT'si olup `results/ideogram/<id>.png` dosyası bulunamayan satırlar da (ör. fal
-API çağrısı başarısız olmuş) sessizce değil, KONSOLA UYARI yazılarak atlanır.
+Rows whose `gt_alpha` field in the manifest is empty (no pixel GT) are skipped
+(no metric can be computed without GT — same as the existing `benchmark.run`
+contract). Rows that have GT in the manifest but whose `results/ideogram/<id>.png`
+file is missing (e.g. the fal API call failed) are also skipped — not silently,
+but with a WARNING printed to the console.
 
-Kullanım:
+Usage:
     uv run python scripts/score_ideogram.py
     uv run python scripts/score_ideogram.py --ideogram-dir results/ideogram \
         --manifest data/testset/manifest.jsonl --metrics results/baseline/metrics.json
@@ -54,8 +55,8 @@ def score_ideogram(ideogram_dir: str, manifest_path: str, metrics_path: str) -> 
 
     if skipped:
         print(
-            f"UYARI: {len(skipped)}/{sum(1 for r in rows if r['gt_alpha'])} GT'li görsel için "
-            f"ideogram çıktısı bulunamadı, atlandı: {skipped}"
+            f"WARNING: no ideogram output found for {len(skipped)}/{sum(1 for r in rows if r['gt_alpha'])} "
+            f"GT-labeled images, skipped: {skipped}"
         )
 
     categories = {r["id"]: r["category"] for r in rows}

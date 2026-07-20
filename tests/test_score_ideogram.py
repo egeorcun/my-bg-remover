@@ -1,5 +1,5 @@
-"""`scripts/score_ideogram.py` için hermetik testler: sahte küçük RGBA ideogram
-çıktıları -> metrik hesaplama + `metrics.json`'a birleştirme (merge)."""
+"""Hermetic tests for `scripts/score_ideogram.py`: fake small RGBA ideogram
+outputs -> metric computation + merge into `metrics.json`."""
 import json
 import sys
 from pathlib import Path
@@ -14,13 +14,13 @@ import score_ideogram as si  # noqa: E402
 
 
 def _write_alpha_png(path: Path, alpha_row: list[int], rgba: bool) -> None:
-    """2x2'lik minik bir görsel; `alpha_row` iki değer -> [[a0,a0],[a1,a1]] alfa deseni."""
+    """A tiny 2x2 image; `alpha_row` is two values -> [[a0,a0],[a1,a1]] alpha pattern."""
     h, w = 2, 2
     arr = np.zeros((h, w, 4 if rgba else 1), dtype=np.uint8)
     for y in range(h):
         val = alpha_row[y]
         if rgba:
-            arr[y, :, 0] = 200  # R (alaka yok, decontaminate testi değil)
+            arr[y, :, 0] = 200  # R (irrelevant, this is not a decontaminate test)
             arr[y, :, 1] = 100
             arr[y, :, 2] = 50
             arr[y, :, 3] = val
@@ -40,7 +40,7 @@ def _make_fixture(tmp_path: Path, with_missing: bool = False) -> tuple[Path, Pat
     rows = [
         {"id": "a1", "image": "unused.jpg", "category": "camouflage", "gt_alpha": str(gt_dir / "a1.png")},
         {"id": "a2", "image": "unused.jpg", "category": "transparent", "gt_alpha": str(gt_dir / "a2.png")},
-        {"id": "a3", "image": "unused.jpg", "category": "camouflage", "gt_alpha": ""},  # GT'siz -> atlanmalı
+        {"id": "a3", "image": "unused.jpg", "category": "camouflage", "gt_alpha": ""},  # no GT -> must be skipped
     ]
     if with_missing:
         rows.append(
@@ -49,17 +49,17 @@ def _make_fixture(tmp_path: Path, with_missing: bool = False) -> tuple[Path, Pat
 
     manifest_path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
 
-    # a1: ideogram GT ile BİREBİR aynı (MAE=0 beklenir).
+    # a1: ideogram EXACTLY matches GT (MAE=0 expected).
     _write_alpha_png(gt_dir / "a1.png", [255, 255], rgba=False)
     _write_alpha_png(ideogram_dir / "a1.png", [255, 255], rgba=True)
 
-    # a2: ideogram GT'den FARKLI (MAE>0 beklenir).
+    # a2: ideogram DIFFERS from GT (MAE>0 expected).
     _write_alpha_png(gt_dir / "a2.png", [255, 255], rgba=False)
     _write_alpha_png(ideogram_dir / "a2.png", [0, 0], rgba=True)
 
     if with_missing:
         _write_alpha_png(gt_dir / "a4.png", [128, 128], rgba=False)
-        # a4.png ideogram dizininde KASITLI OLARAK YOK (fal API başarısız simülasyonu).
+        # a4.png is DELIBERATELY ABSENT from the ideogram directory (failed fal API simulation).
 
     return manifest_path, ideogram_dir
 
@@ -70,13 +70,13 @@ def test_score_ideogram_computes_metrics_for_gt_rows(tmp_path):
 
     result = si.score_ideogram(str(ideogram_dir), str(manifest_path), str(metrics_path))
 
-    assert set(result["per_image"]["ideogram"]) == {"a1", "a2"}  # a3 (GT'siz) dahil değil
+    assert set(result["per_image"]["ideogram"]) == {"a1", "a2"}  # a3 (no GT) not included
     assert result["per_image"]["ideogram"]["a1"]["mae"] == pytest.approx(0.0, abs=1e-6)
     assert result["per_image"]["ideogram"]["a2"]["mae"] == pytest.approx(1.0, abs=1e-6)
 
     per_cat = result["per_category"]["ideogram"]
-    assert per_cat["camouflage"]["mae"] == pytest.approx(0.0, abs=1e-6)  # yalnız a1 (camouflage)
-    assert per_cat["transparent"]["mae"] == pytest.approx(1.0, abs=1e-6)  # yalnız a2 (transparent)
+    assert per_cat["camouflage"]["mae"] == pytest.approx(0.0, abs=1e-6)  # only a1 (camouflage)
+    assert per_cat["transparent"]["mae"] == pytest.approx(1.0, abs=1e-6)  # only a2 (transparent)
 
     overall = result["overall"]["ideogram"]
     assert overall["mae"] == pytest.approx(0.5, abs=1e-6)  # (0.0 + 1.0) / 2
@@ -92,11 +92,11 @@ def test_score_ideogram_skips_missing_output_without_crashing(tmp_path, capsys):
 
     result = si.score_ideogram(str(ideogram_dir), str(manifest_path), str(metrics_path))
 
-    assert "a4" not in result["per_image"]["ideogram"]  # ideogram çıktısı yok -> atlandı
+    assert "a4" not in result["per_image"]["ideogram"]  # no ideogram output -> skipped
     assert set(result["per_image"]["ideogram"]) == {"a1", "a2"}
     captured = capsys.readouterr()
     assert "a4" in captured.out
-    assert "UYARI" in captured.out
+    assert "WARNING" in captured.out
 
 
 def test_score_ideogram_merges_into_existing_metrics_json(tmp_path):
@@ -112,7 +112,7 @@ def test_score_ideogram_merges_into_existing_metrics_json(tmp_path):
 
     result = si.score_ideogram(str(ideogram_dir), str(manifest_path), str(metrics_path))
 
-    # var olan birefnet-hr girdileri KORUNMALI, yalnız ideogram eklenmeli.
+    # the existing birefnet-hr entries MUST BE PRESERVED, only ideogram added.
     assert result["overall"]["birefnet-hr"] == {"mae": 0.05}
     assert "ideogram" in result["overall"]
     assert "ideogram" in result["per_category"]

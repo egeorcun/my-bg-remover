@@ -1,6 +1,7 @@
-"""fal.ai Ideogram remove-background referans çıktıları ($0.01/görsel).
+"""fal.ai Ideogram remove-background reference outputs ($0.01/image).
 
-FAL_KEY env değişkeni gerekir. Idempotent: çıktı varsa API çağrılmaz.
+Requires the FAL_KEY env variable. Idempotent: the API is not called if the
+output already exists.
 """
 import os
 from pathlib import Path
@@ -21,7 +22,7 @@ def fetch_reference(image_path: str, out_path: str) -> None:
     if Path(out_path).exists():
         return
     if not os.environ.get("FAL_KEY"):
-        raise RuntimeError("FAL_KEY tanımlı değil: https://fal.ai/dashboard/keys")
+        raise RuntimeError("FAL_KEY is not set: https://fal.ai/dashboard/keys")
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     url = fal_client.upload_file(image_path)
     result = fal_client.subscribe(ENDPOINT, arguments={"image_url": url})

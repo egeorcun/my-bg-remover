@@ -26,15 +26,15 @@ def test_camouflage_category_is_valid(tmp_path):
 
 def test_invalid_category_raises(tmp_path):
     p = tmp_path / "m.jsonl"
-    p.write_text(json.dumps({"id": "x", "image": "i.jpg", "category": "ucan-kus", "gt_alpha": None}) + "\n")
-    with pytest.raises(ValueError, match="kategori"):
+    p.write_text(json.dumps({"id": "x", "image": "i.jpg", "category": "flying-bird", "gt_alpha": None}) + "\n")
+    with pytest.raises(ValueError, match="unknown category"):
         load_manifest(str(p))
 
 
 def test_missing_key_raises(tmp_path):
     p = tmp_path / "m.jsonl"
     p.write_text(json.dumps({"id": "x", "image": "i.jpg"}) + "\n")
-    with pytest.raises(ValueError, match="anahtar"):
+    with pytest.raises(ValueError, match="missing key"):
         load_manifest(str(p))
 
 
@@ -42,5 +42,5 @@ def test_duplicate_id_raises(tmp_path):
     p = tmp_path / "m.jsonl"
     row = {"id": "dup", "image": "i.jpg", "category": "hair", "gt_alpha": None}
     p.write_text(json.dumps(row) + "\n" + json.dumps(row) + "\n")
-    with pytest.raises(ValueError, match="dup"):
+    with pytest.raises(ValueError, match="duplicate id: dup"):
         load_manifest(str(p))

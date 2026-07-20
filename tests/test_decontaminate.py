@@ -7,7 +7,7 @@ from bgr.decontaminate import decontaminate
 
 @pytest.fixture
 def red_on_green():
-    """Kırmızı kare, yeşil zemin, kenarda 3px yumuşak (karışmış) geçiş."""
+    """Red square, green background, soft (mixed) 3px transition at the edge."""
     w = h = 64
     img = np.zeros((h, w, 3), dtype=np.float64)
     img[:, :] = (0.0, 0.8, 0.0)
@@ -32,9 +32,9 @@ def test_edge_pixels_lose_green_spill(red_on_green):
     out = np.asarray(decontaminate(pil, alpha), dtype=np.float64) / 255.0
     band = (alpha > 0.2) & (alpha < 0.8)
     naive_rgb = np.asarray(pil, dtype=np.float64) / 255.0
-    # kenar bandında yeşil kanal, naive kompozite göre belirgin azalmalı
+    # in the edge band the green channel must drop noticeably vs the naive composite
     assert out[..., 1][band].mean() < naive_rgb[..., 1][band].mean() - 0.05
-    # opak iç bölge değişmemeli (kırmızı kalmalı)
+    # the opaque core must stay unchanged (remain red)
     core = alpha > 0.99
     assert abs(out[..., 0][core].mean() - naive_rgb[..., 0][core].mean()) < 0.05
 

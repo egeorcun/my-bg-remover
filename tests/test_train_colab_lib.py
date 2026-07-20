@@ -1,7 +1,7 @@
-"""`training/train_colab_lib.py` için saf-Python simülasyon testleri (görev
-madde 6: sampler/oversampling + resume-tespiti mantığının GPU/Colab olmadan
-lokal doğrulanması). Gerçek Colab/torch/Drive ortamı gerektirmez, `slow`
-değildir."""
+"""Pure-Python simulation tests for `training/train_colab_lib.py` (task item
+6: local validation of the sampler/oversampling + resume-detection logic
+without GPU/Colab). Requires no real Colab/torch/Drive environment, and is not
+`slow`."""
 import ast
 import json
 from pathlib import Path
@@ -51,7 +51,7 @@ def _synthetic_stems(counts: dict[str, int]) -> tuple[list[str], dict[str, str]]
 
 
 # ============================================================================
-# 1) Kategori ağırlıklı örnekleme
+# 1) Category-weighted sampling
 # ============================================================================
 def test_compute_sample_weights_hits_target_share():
     counts = {"transparent": 50, "camouflage": 80, "hair": 9000, "general": 3000, "thin": 800, "complex": 2000}
@@ -64,7 +64,7 @@ def test_compute_sample_weights_hits_target_share():
     shares = compute_expected_shares(weights, stems, stem_category)
     assert shares["transparent"] == pytest.approx(0.20, abs=1e-9)
     assert shares["camouflage"] == pytest.approx(0.20, abs=1e-9)
-    # Kalan %60'lık pay, hedefsiz kategoriler arasında HAM sayılarıyla orantılı kalmalı.
+    # The remaining 60% share must stay proportional to the RAW counts of the untargeted categories.
     remaining = {c: shares[c] for c in ("hair", "general", "thin", "complex")}
     assert sum(remaining.values()) == pytest.approx(0.60, abs=1e-9)
     total_other = counts["hair"] + counts["general"] + counts["thin"] + counts["complex"]
@@ -74,8 +74,9 @@ def test_compute_sample_weights_hits_target_share():
 
 
 def test_compute_sample_weights_missing_target_category_is_ignored():
-    # transparent hiç yoksa (bu batch'te 0 örnek), hedef payı sessizce düşürülmeli
-    # (ValueError FIRLATILMAMALI) — kalan tüm pay diğer kategorilere gider.
+    # If transparent is entirely absent (0 samples in this batch), its target share
+    # must be dropped silently (NO ValueError) — all the remaining share goes to
+    # the other categories.
     counts = {"camouflage": 10, "hair": 90}
     stems, stem_category = _synthetic_stems(counts)
     weights = compute_sample_weights(stems, stem_category, {"transparent": 0.20, "camouflage": 0.20})
@@ -92,11 +93,11 @@ def test_compute_sample_weights_rejects_impossible_target():
 
 
 # ============================================================================
-# 1b) v2 sampler preset (rebalancing — v1'deki catastrophic forgetting fix)
+# 1b) v2 sampler preset (rebalancing — fix for the catastrophic forgetting in v1)
 # ============================================================================
 def test_sampler_preset_v1_matches_default_target_share():
-    # target_share=None (varsayılan) v1 fine-tune koşusunun (epoch_1.pth)
-    # davranışıyla BİREBİR aynı olmalı — geriye dönük uyumluluk.
+    # target_share=None (default) must be IDENTICAL to the behavior of the v1
+    # fine-tune run (epoch_1.pth) — backward compatibility.
     counts = {"transparent": 4100, "camouflage": 8080, "hair": 9422, "complex": 2190, "thin": 810}
     stems, stem_category = _synthetic_stems(counts)
     weights_default = compute_sample_weights(stems, stem_category, None)
@@ -112,32 +113,32 @@ def test_sampler_presets_registry_has_v1_v2_v3_and_v4():
     assert SAMPLER_PRESETS["v3"] is SAMPLER_PRESET_V3
     assert SAMPLER_PRESETS["v4"] is SAMPLER_PRESET_V4
     assert SAMPLER_PRESETS["v5"] is SAMPLER_PRESET_V5
-    # compute_sample_weights yalnız sum > 1.0'da ValueError fırlatır; tam 1.0'a İZİN VAR
-    # (o durumda hedefsiz "_other" örneklere 0 ağırlık düşer — bkz. SAMPLER_PRESET_V2 docstring'i).
+    # compute_sample_weights only raises ValueError on sum > 1.0; exactly 1.0 IS allowed
+    # (in that case untargeted "_other" samples get 0 weight — see the SAMPLER_PRESET_V2 docstring).
     for preset in SAMPLER_PRESETS.values():
         assert sum(preset.values()) <= 1.0 + 1e-9
-    # v2 kasıtlı olarak TAM %100 dağıtır: camo 18 + transparent 20 + hair 20 +
-    # complex 20 + thin 12 + general 10 (ideogram skorlaması sonrası ayar —
-    # transparent en yakın kovalama hedefi olduğu için %20'de tutuldu).
+    # v2 deliberately distributes EXACTLY 100%: camo 18 + transparent 20 + hair 20 +
+    # complex 20 + thin 12 + general 10 (adjustment after the ideogram scoring —
+    # transparent was kept at 20% because it is the closest chase target).
     assert sum(SAMPLER_PRESET_V2.values()) == pytest.approx(1.0, abs=1e-9)
     assert SAMPLER_PRESET_V2["transparent"] == pytest.approx(0.20)
     assert SAMPLER_PRESET_V2["camouflage"] == pytest.approx(0.18)
 
 
 def test_sampler_preset_v2_hits_target_shares_within_one_percent():
-    # `docs/reports/2026-07-faz2-veri.md` §2'nin belgelediği ham/materyalize
-    # sayılara yakın, TÜM 6 kategorinin de mevcut olduğu bir dağılım (camouflage
-    # ×2, transparent ×10 fiziksel çarpanlarıyla materyalize edilmiş; general=4000
-    # senaryosu — doc §2 tablosu): camouflage doğal olarak en büyük paylardan biri
-    # (~%28), complex/thin ise v1'de neredeyse hiç pay alamayan küçük kategoriler
-    # (bkz. v1-entegrasyon + bgr-v1-comparison raporlarındaki catastrophic
-    # forgetting bulgusu). Preset toplamı tam %100 olduğundan ve tüm kategoriler
-    # hedefli olduğundan gerçekleşen paylar hedeflerle BİREBİR örtüşür; tolerans
-    # yine de spec'teki "within 1%" olarak bırakıldı.
+    # A distribution close to the raw/materialized counts documented in
+    # the project's internal phase report (removed from the repo) §2, with ALL 6 categories present
+    # (materialized with the physical camouflage x2, transparent x10 multipliers;
+    # the general=4000 scenario — doc §2 table): camouflage is naturally one of the
+    # largest shares (~28%), while complex/thin are the small categories that got
+    # almost no share in v1 (see the catastrophic forgetting finding in the
+    # v1-integration + bgr-v1-comparison reports). Since the preset sums to exactly
+    # 100% and all categories are targeted, the achieved shares match the targets
+    # EXACTLY; the tolerance is nevertheless left at the spec's "within 1%".
     counts = {
-        "camouflage": 8080,   # 4040 ham × 2
+        "camouflage": 8080,   # 4040 raw x 2
         "hair": 9422,
-        "transparent": 4100,  # 410 ham × 10
+        "transparent": 4100,  # 410 raw x 10
         "complex": 2190,
         "thin": 810,
         "general": 4000,
@@ -153,13 +154,13 @@ def test_sampler_preset_v2_hits_target_shares_within_one_percent():
         if cat not in achieved:
             continue
         assert achieved[cat] == pytest.approx(target, abs=0.01), (
-            f"{cat}: hedef %{target * 100:.1f}, hesaplanan %{achieved[cat] * 100:.1f}"
+            f"{cat}: target {target * 100:.1f}%, computed {achieved[cat] * 100:.1f}%"
         )
 
-    # v1'in kök nedenini (complex/thin'in ham paydan çok daha düşük efektif pay
-    # alması) v2'nin düzelttiğini doğrula: complex/thin artık ham paylarından
-    # AÇIKÇA daha yüksek örnekleniyor, camouflage ise ham payından DÜŞÜK
-    # (background: "camo downweighted from its raw ~%28-36 share").
+    # Verify that v2 fixes v1's root cause (complex/thin getting a far lower
+    # effective share than their raw share): complex/thin are now sampled CLEARLY
+    # above their raw shares, while camouflage is BELOW its raw share
+    # (background: "camo downweighted from its raw ~28-36% share").
     assert achieved["complex"] > raw_share["complex"]
     assert achieved["thin"] > raw_share["thin"]
     assert achieved["camouflage"] < raw_share["camouflage"]
@@ -177,20 +178,20 @@ def test_sampler_preset_v2_includes_general_when_present():
     stems, stem_category = _synthetic_stems(counts)
     weights = compute_sample_weights(stems, stem_category, SAMPLER_PRESET_V2)
     achieved = compute_expected_shares(weights, stems, stem_category)
-    # Preset toplamı tam %100 ve tüm 6 kategori mevcut/hedefli — gerçekleşen
-    # paylar hedeflerle birebir örtüşmeli, renormalizasyon yok.
+    # The preset sums to exactly 100% and all 6 categories are present/targeted —
+    # the achieved shares must match the targets exactly, no renormalization.
     assert achieved["general"] == pytest.approx(0.10, abs=1e-9)
     assert sum(achieved.values()) == pytest.approx(1.0, abs=1e-9)
 
 
 def test_sampler_preset_v2_gives_zero_weight_to_unknown_stems():
-    # Preset toplamı tam 1.0 iken manifest'te kategorisi bulunamayan ("_other")
-    # stem'lere SIFIR ağırlık düşmeli (hiç örneklenmezler) — bilinçli tercih,
-    # bkz. SAMPLER_PRESET_V2 docstring'i. ValueError FIRLATILMAMALI (yalnız
-    # sum > 1.0 hatadır).
+    # When the preset sums to exactly 1.0, stems whose category is missing from
+    # the manifest ("_other") must get ZERO weight (never sampled) — a deliberate
+    # choice, see the SAMPLER_PRESET_V2 docstring. NO ValueError must be raised
+    # (only sum > 1.0 is an error).
     counts = {"camouflage": 100, "transparent": 100, "hair": 100, "complex": 100, "thin": 100, "general": 100}
     stems, stem_category = _synthetic_stems(counts)
-    stems_with_unknown = stems + ["gizemli_stem_0001", "gizemli_stem_0002"]  # manifest'te yok
+    stems_with_unknown = stems + ["mystery_stem_0001", "mystery_stem_0002"]  # not in the manifest
 
     weights = compute_sample_weights(stems_with_unknown, stem_category, SAMPLER_PRESET_V2)
     assert weights[-1] == 0.0
@@ -204,7 +205,7 @@ def test_sampler_preset_v2_gives_zero_weight_to_unknown_stems():
 
 
 # ============================================================================
-# 1c) v3 sampler preset (v2 gerçek benchmark sonrası ayar — bkz. modül docstring'i)
+# 1c) v3 sampler preset (adjustment after v2's real benchmark — see the module docstring)
 # ============================================================================
 def test_sampler_preset_v3_values_and_sum_to_one():
     assert SAMPLER_PRESET_V3 == {
@@ -219,9 +220,9 @@ def test_sampler_preset_v3_values_and_sum_to_one():
 
 
 def test_sampler_preset_v3_pushes_transparent_above_v2():
-    # v2->v3'te transparent MAE kötüleşti (0.0437->0.0481, ideogram hedefi 0.0343) --
-    # v3 transparent payını v2'nin %20'sinden (bkz. SAMPLER_PRESET_V2 kaydı, güncel
-    # değer %20) %24'e YÜKSELTMELİ, en büyük tek pay olmalı.
+    # transparent MAE got worse from v2 to v3 (0.0437->0.0481, ideogram target 0.0343) --
+    # v3 must RAISE the transparent share from v2's 20% (see the SAMPLER_PRESET_V2
+    # record, current value 20%) to 24%, and it must be the single largest share.
     assert SAMPLER_PRESET_V3["transparent"] > SAMPLER_PRESET_V2["transparent"]
     assert SAMPLER_PRESET_V3["transparent"] == max(SAMPLER_PRESET_V3.values())
 
@@ -242,14 +243,14 @@ def test_sampler_preset_v3_hits_target_shares_within_one_percent():
         if cat not in achieved:
             continue
         assert achieved[cat] == pytest.approx(target, abs=0.01), (
-            f"{cat}: hedef %{target * 100:.1f}, hesaplanan %{achieved[cat] * 100:.1f}"
+            f"{cat}: target {target * 100:.1f}%, computed {achieved[cat] * 100:.1f}%"
         )
 
 
 def test_sampler_preset_v3_gives_zero_weight_to_unknown_stems():
     counts = {"camouflage": 100, "transparent": 100, "hair": 100, "complex": 100, "thin": 100, "general": 100}
     stems, stem_category = _synthetic_stems(counts)
-    stems_with_unknown = stems + ["gizemli_stem_0001"]  # örn. yeni bir _o00 ama manifest satırı eksik
+    stems_with_unknown = stems + ["mystery_stem_0001"]  # e.g. a new _o00 whose manifest row is missing
 
     weights = compute_sample_weights(stems_with_unknown, stem_category, SAMPLER_PRESET_V3)
     assert weights[-1] == 0.0
@@ -257,8 +258,8 @@ def test_sampler_preset_v3_gives_zero_weight_to_unknown_stems():
 
 
 # ============================================================================
-# 1c-2) v4 sampler preset (v3 benchmark sonrası: odak complex+thin + yeni
-# yetenekler text/fx/illustration — bkz. SAMPLER_PRESET_V4 docstring'i)
+# 1c-2) v4 sampler preset (after the v3 benchmark: focus on complex+thin + the
+# new capabilities text/fx/illustration — see the SAMPLER_PRESET_V4 docstring)
 # ============================================================================
 def test_sampler_preset_v4_values_and_sum_to_one():
     assert SAMPLER_PRESET_V4 == {
@@ -272,16 +273,17 @@ def test_sampler_preset_v4_values_and_sum_to_one():
         "fx": 0.08,
         "illustration": 0.08,
     }
-    # toplam TAM %100 — hedefsiz "_other" stem'lere 0 ağırlık düşer
-    # (bkz. SAMPLER_PRESET_V2 docstring'i, aynı bilinçli tercih).
+    # sums to EXACTLY 100% — untargeted "_other" stems get 0 weight
+    # (see the SAMPLER_PRESET_V2 docstring, same deliberate choice).
     assert sum(SAMPLER_PRESET_V4.values()) == pytest.approx(1.0, abs=1e-9)
 
 
 def test_sampler_preset_v4_uses_only_known_categories():
-    # v4'ün TÜM kategorileri bilinen kümede olmalı: eski 6 kategori + v4'ün
-    # üç yeni yeteneği (text/fx/illustration — v4_veri_guncelleme_hucresi.py
-    # + scripts/make_textfx.py üretir). Yazım hatası (ör. "ilustration")
-    # sampler'da sessizce 0 örnekli hedef olarak kaybolurdu — burada yakalanır.
+    # ALL of v4's categories must be in the known set: the old 6 categories plus
+    # v4's three new capabilities (text/fx/illustration — produced by
+    # v4_veri_guncelleme_hucresi.py + scripts/make_textfx.py). A typo
+    # (e.g. "ilustration") would silently vanish in the sampler as a target with
+    # 0 samples — it gets caught here.
     known = {
         "camouflage", "transparent", "hair", "complex", "thin", "general",
         "text", "fx", "illustration",
@@ -290,10 +292,11 @@ def test_sampler_preset_v4_uses_only_known_categories():
 
 
 def test_sampler_preset_v4_shifts_shares_from_v3():
-    # v3 benchmark sonrası yön: camo payı düşer (marj devasa: 0.0304 vs
-    # Ideogram 0.1179), hair payı düşer (0.0067 MAE, rmbg 0.0045'e yakın),
-    # transparent v3'ün %24'ünden iner ama korunur (%18 — kovalamaca sürüyor),
-    # yeni yetenekler toplamda anlamlı pay alır.
+    # Direction after the v3 benchmark: the camo share drops (the margin is
+    # enormous: 0.0304 vs Ideogram 0.1179), the hair share drops (0.0067 MAE,
+    # close to rmbg's 0.0045), transparent comes down from v3's 24% but is
+    # protected (18% — the chase continues), and the new capabilities get a
+    # meaningful combined share.
     assert SAMPLER_PRESET_V4["camouflage"] < SAMPLER_PRESET_V3["camouflage"]
     assert SAMPLER_PRESET_V4["hair"] < SAMPLER_PRESET_V3["hair"]
     assert SAMPLER_PRESET_V4["transparent"] < SAMPLER_PRESET_V3["transparent"]
@@ -320,14 +323,14 @@ def test_sampler_preset_v4_hits_target_shares_within_one_percent():
         if cat not in achieved:
             continue
         assert achieved[cat] == pytest.approx(target, abs=0.01), (
-            f"{cat}: hedef %{target * 100:.1f}, hesaplanan %{achieved[cat] * 100:.1f}"
+            f"{cat}: target {target * 100:.1f}%, computed {achieved[cat] * 100:.1f}%"
         )
 
 
 def test_sampler_preset_v4_gives_zero_weight_to_unknown_stems():
     counts = {c: 100 for c in SAMPLER_PRESET_V4}
     stems, stem_category = _synthetic_stems(counts)
-    stems_with_unknown = stems + ["gizemli_stem_0001"]  # örn. manifest satırı eksik yeni bir textfx stem'i
+    stems_with_unknown = stems + ["mystery_stem_0001"]  # e.g. a new textfx stem whose manifest row is missing
 
     weights = compute_sample_weights(stems_with_unknown, stem_category, SAMPLER_PRESET_V4)
     assert weights[-1] == 0.0
@@ -335,19 +338,19 @@ def test_sampler_preset_v4_gives_zero_weight_to_unknown_stems():
 
 
 # ============================================================================
-# 1d) v3 sabit epoch uzunluğu (`resolve_sampler_num_samples`)
+# 1d) v3 fixed epoch length (`resolve_sampler_num_samples`)
 # ============================================================================
 def test_resolve_sampler_num_samples_defaults_to_dataset_len():
-    # num_samples=None -> v1/v2 davranışı BİREBİR: dataset büyüklüğü döner.
+    # num_samples=None -> IDENTICAL to the v1/v2 behavior: returns the dataset size.
     assert resolve_sampler_num_samples(27715) == 27715
     assert resolve_sampler_num_samples(41830) == 41830
 
 
 def test_resolve_sampler_num_samples_uses_fixed_value_when_given():
-    # v3: dataset ~14k _o00 ile büyüse bile (41830), sabit 27715 (v2 epoch
-    # parite) döner -- epoch maliyeti değişmez.
+    # v3: even if the dataset grows by ~14k _o00 (41830), the fixed 27715 (v2 epoch
+    # parity) is returned -- the epoch cost does not change.
     assert resolve_sampler_num_samples(41830, num_samples=27715) == 27715
-    assert resolve_sampler_num_samples(1000, num_samples=27715) == 27715  # dataset küçük olsa bile sabit değer
+    assert resolve_sampler_num_samples(1000, num_samples=27715) == 27715  # fixed value even if the dataset is small
 
 
 def test_resolve_sampler_num_samples_rejects_non_positive():
@@ -369,7 +372,7 @@ def test_load_stem_categories(tmp_path):
 
 
 # ============================================================================
-# 2) Checkpoint keşfi / budama
+# 2) Checkpoint discovery / pruning
 # ============================================================================
 def test_find_latest_checkpoint_picks_max_epoch(tmp_path):
     for name in ("epoch_3.pth", "epoch_10.pth", "epoch_1.pth", "garbage.txt", "epoch_x.pth"):
@@ -403,7 +406,7 @@ def test_prune_old_checkpoints_noop_when_fewer_than_keep_n(tmp_path):
 
 
 # ============================================================================
-# 3) Deterministik TRAIN/VAL bölünmesi + sabit hızlı-değerlendirme alt kümesi
+# 3) Deterministic TRAIN/VAL split + fixed quick-evaluation subset
 # ============================================================================
 def test_deterministic_val_split_is_reproducible_and_covers_all():
     stems = [f"id_{i:05d}" for i in range(2000)]
@@ -440,7 +443,7 @@ def test_fixed_eval_subset_capped_by_available_size():
 
 
 # ============================================================================
-# 4) BiRefNet resmi mantık parçaları
+# 4) Pieces of the official BiRefNet logic
 # ============================================================================
 @pytest.mark.parametrize(
     "epoch,total_epochs,finetune_last_epochs,expected",
@@ -448,14 +451,15 @@ def test_fixed_eval_subset_capped_by_available_size():
         (90, 100, -10, False),
         (91, 100, -10, True),
         (100, 100, -10, True),
-        (1, 100, 0, False),  # finetune_last_epochs=0 -> "choose 0 to skip" (config.py yorumu), hep False
+        (1, 100, 0, False),  # finetune_last_epochs=0 -> "choose 0 to skip" (config.py comment), always False
         (100, 100, 0, False),
-        # Kısa koşu koruması: EPOCHS <= |ft| -> hile TAMAMEN atlanır (pencere epoch 1'in
-        # öncesine düşer, decay üssü daha ilk epoch'ta n>1 olurdu — review Critical 1 knock-on).
+        # Short-run guard: EPOCHS <= |ft| -> the trick is skipped ENTIRELY (the window
+        # would start before epoch 1 and the decay exponent would be n>1 at the very
+        # first epoch — review Critical 1 knock-on).
         (1, 6, -10, False),
         (6, 6, -10, False),
         (10, 10, -10, False),
-        # EPOCHS > |ft| -> resmi koşul aynen geçerli; üs otomatik olarak n>=1'den başlar.
+        # EPOCHS > |ft| -> the official condition applies as-is; the exponent automatically starts at n>=1.
         (10, 20, -10, False),
         (11, 20, -10, True),
     ],
@@ -465,7 +469,8 @@ def test_should_apply_finetune_reweight(epoch, total_epochs, finetune_last_epoch
 
 
 def test_finetune_reweight_exponent_starts_at_one_when_applicable():
-    # Hile uygulandığı İLK epoch'ta üs n=1 olmalı (0.9^1) — hiçbir kısayolda n>1 ile başlamamalı.
+    # At the FIRST epoch where the trick applies, the exponent must be n=1 (0.9^1) —
+    # no code path may start with n>1.
     total_epochs, ft = 20, -10
     first_applicable = next(
         e for e in range(1, total_epochs + 1) if should_apply_finetune_reweight(e, total_epochs, ft)
@@ -486,9 +491,9 @@ def test_effective_lr_override_bypasses_formula():
 
 
 # ============================================================================
-# 5) config.py yaması (idempotentlik — review Critical 2)
+# 5) config.py patching (idempotency — review Critical 2)
 # ============================================================================
-# BiRefNet main dalındaki gerçek satırların birebir kopyası (curl ile doğrulandı).
+# Verbatim copy of the real lines on the BiRefNet main branch (verified with curl).
 _CONFIG_SNIPPET = """\
 class Config():
     def __init__(self) -> None:
@@ -512,7 +517,7 @@ def test_apply_config_patches_is_idempotent():
 
 
 def test_apply_config_patches_reparameterizable_after_previous_patch():
-    # Aynı VM'de kullanıcı BATCH/görev değiştirip yeniden koşarsa da çalışmalı.
+    # Must also work if the user changes BATCH/task on the same VM and re-runs.
     once = apply_config_patches(_CONFIG_SNIPPET, task="Matting", sys_home_dir="/content/dis_data", batch_size=2)
     again = apply_config_patches(once, task="General", sys_home_dir="/content/other", batch_size=4)
     assert "'Matting'][3]" in again
@@ -524,11 +529,11 @@ def test_apply_config_patches_raises_on_unknown_source():
     with pytest.raises(ValueError):
         apply_config_patches("class Config: pass", task="Matting", sys_home_dir="/x", batch_size=2)
     with pytest.raises(ValueError):
-        apply_config_patches(_CONFIG_SNIPPET, task="YokBoyleGorev", sys_home_dir="/x", batch_size=2)
+        apply_config_patches(_CONFIG_SNIPPET, task="NoSuchTask", sys_home_dir="/x", batch_size=2)
 
 
 # ============================================================================
-# 6) copy_pairs (boyut doğrulamalı kopyalama — review Important 3)
+# 6) copy_pairs (size-validated copying — review Important 3)
 # ============================================================================
 def _make_pair_tree(tmp_path, stems, im_content=b"IMDATA-123", gt_content=b"GTDATA-456"):
     src_im, src_gt = tmp_path / "src_im", tmp_path / "src_gt"
@@ -545,18 +550,18 @@ def test_copy_pairs_copies_and_is_idempotent(tmp_path):
     stems = ["a", "b", "c"]
     src_im, src_gt, dst_im, dst_gt = _make_pair_tree(tmp_path, stems)
     assert copy_pairs(stems, src_im, src_gt, dst_im, dst_gt) == 3
-    assert copy_pairs(stems, src_im, src_gt, dst_im, dst_gt) == 0  # ikinci koşu no-op
+    assert copy_pairs(stems, src_im, src_gt, dst_im, dst_gt) == 0  # second run is a no-op
     for stem in stems:
         assert (dst_im / f"{stem}.jpg").read_bytes() == b"IMDATA-123"
         assert (dst_gt / f"{stem}.png").read_bytes() == b"GTDATA-456"
 
 
 def test_copy_pairs_repairs_truncated_gt(tmp_path):
-    # im tam ama gt kesik (yarım kalmış Drive kopyası) -> çift YENİDEN kopyalanmalı.
+    # im is intact but gt is truncated (a half-finished Drive copy) -> the pair must be RE-copied.
     stems = ["a"]
     src_im, src_gt, dst_im, dst_gt = _make_pair_tree(tmp_path, stems)
     copy_pairs(stems, src_im, src_gt, dst_im, dst_gt)
-    (dst_gt / "a.png").write_bytes(b"GT")  # kesik gt simülasyonu (im boyutu hâlâ doğru)
+    (dst_gt / "a.png").write_bytes(b"GT")  # truncated gt simulation (im size still correct)
     assert copy_pairs(stems, src_im, src_gt, dst_im, dst_gt) == 1
     assert (dst_gt / "a.png").read_bytes() == b"GTDATA-456"
 
@@ -571,9 +576,9 @@ def test_copy_pairs_repairs_truncated_im(tmp_path):
 
 
 def test_copy_pairs_parallel_matches_serial(tmp_path):
-    # Paralel (varsayılan max_workers=16) sonucun, tek-iş-parçacıklı (max_workers=1)
-    # koşumla BİREBİR aynı dizin ağacını ürettiğini kanıtlar — aynı fixture (200 çift,
-    # her biri kendine özgü içerik), iki ayrı hedef ağaca kopyalanır, sonra karşılaştırılır.
+    # Proves that the parallel run (default max_workers=16) produces a directory tree
+    # IDENTICAL to a single-threaded run (max_workers=1) — the same fixture (200 pairs,
+    # each with unique content) is copied into two separate destination trees, then compared.
     stems = [f"stem_{i:04d}" for i in range(200)]
     src_im, src_gt = tmp_path / "src_im", tmp_path / "src_gt"
     src_im.mkdir()
@@ -597,26 +602,26 @@ def test_copy_pairs_parallel_matches_serial(tmp_path):
     assert _tree(dst_im_serial) == _tree(dst_im_parallel)
     assert _tree(dst_gt_serial) == _tree(dst_gt_parallel)
 
-    # İkinci koşum (idempotentlik) her iki modda da no-op olmalı.
+    # A second run (idempotency) must be a no-op in both modes.
     assert copy_pairs(stems, src_im, src_gt, dst_im_serial, dst_gt_serial, max_workers=1) == 0
     assert copy_pairs(stems, src_im, src_gt, dst_im_parallel, dst_gt_parallel, max_workers=16) == 0
 
 
 def test_copy_pairs_collects_errors_and_raises_first_with_count(tmp_path):
-    # Kaynakta OLMAYAN bir stem varsa o çiftin kopyalanması hata verir; ama diğer
-    # TÜM çiftler yine de işlenmeli (kısmi ilerleme kaybolmamalı) ve sonda İLK hata
-    # toplam hata sayısıyla birlikte fırlatılmalı.
+    # If a stem is MISSING at the source, copying that pair fails; but ALL other
+    # pairs must still be processed (partial progress must not be lost) and at the
+    # end the FIRST error must be raised together with the total error count.
     stems = ["a", "missing", "b"]
     src_im, src_gt, dst_im, dst_gt = _make_pair_tree(tmp_path, ["a", "b"])
     with pytest.raises(RuntimeError, match=r"1/3.*missing"):
         copy_pairs(stems, src_im, src_gt, dst_im, dst_gt)
-    # "a" ve "b" hatasız çiftler olduğu için yine de kopyalanmış olmalı.
+    # "a" and "b" are error-free pairs, so they must still have been copied.
     assert (dst_im / "a.jpg").exists()
     assert (dst_im / "b.jpg").exists()
 
 
 # ============================================================================
-# 7) Kalıcı VAL bölünmesi (review Important 2)
+# 7) Persistent VAL split (review Important 2)
 # ============================================================================
 def test_load_or_create_val_split_first_run_persists(tmp_path):
     stems = [f"id_{i:05d}" for i in range(1000)]
@@ -634,8 +639,8 @@ def test_load_or_create_val_split_loads_existing_and_keeps_new_stems_in_train(tm
     persist = tmp_path / "val_stems.json"
     _, val_first = load_or_create_val_split(stems, seed=42, val_fraction=0.02, persist_path=persist)
 
-    # Veri seti BÜYÜDÜ (Faz 2 yeniden koştu, 200 yeni çift) — val kümesi DEĞİŞMEMELİ,
-    # yeni stem'lerin tamamı train'e gitmeli (belgelenmiş tercih, sızıntı yok).
+    # The dataset GREW (Phase 2 re-ran, 200 new pairs) — the val set must NOT change,
+    # all new stems must go to train (documented choice, no leak).
     grown = stems + [f"new_{i:05d}" for i in range(200)]
     train2, val2 = load_or_create_val_split(grown, seed=42, val_fraction=0.02, persist_path=persist)
     assert val2 == val_first
@@ -647,14 +652,14 @@ def test_load_or_create_val_split_drops_vanished_val_stems(tmp_path):
     stems = [f"id_{i:05d}" for i in range(1000)]
     persist = tmp_path / "val_stems.json"
     _, val_first = load_or_create_val_split(stems, seed=42, val_fraction=0.02, persist_path=persist)
-    shrunk = [s for s in stems if s != val_first[0]]  # bir val görseli diskten silindi
+    shrunk = [s for s in stems if s != val_first[0]]  # one val image was deleted from disk
     _, val2 = load_or_create_val_split(shrunk, seed=42, val_fraction=0.02, persist_path=persist)
     assert val2 == val_first[1:]
 
 
 # ============================================================================
-# 7) v3 — VAL sızıntı hariç tutma + kompozit manifest merge
-#    (bkz. training/v3_veri_guncelleme_hucresi.py)
+# 7) v3 — VAL leak exclusion + composite manifest merge
+#    (see training/v3_veri_guncelleme_hucresi.py)
 # ============================================================================
 def test_strip_composite_copy_suffix_strips_v_and_o_suffixes():
     assert strip_composite_copy_suffix("camo_00365_v03") == "camo_00365"
@@ -663,33 +668,34 @@ def test_strip_composite_copy_suffix_strips_v_and_o_suffixes():
 
 
 def test_strip_composite_copy_suffix_leaves_unmatched_stems_unchanged():
-    # Eşleşmeyen bir stem (son eksiz kaynak id, ya da 3 haneli indeks) OLDUĞU
-    # GİBİ döner — bu SIZINTI RİSKİDİR (docstring: son ekli hali hariç-tutma
-    # kümesine girer, hiçbir kaynak id ile eşleşmez, koruma o kaynak için
-    # BAYPAS olur); derive_val_excluded_source_ids bu durumu ayrıca raporlar.
+    # A non-matching stem (a suffix-less source id, or a 3-digit index) is returned
+    # AS IS — this is a LEAK RISK (docstring: the suffixed form enters the exclusion
+    # set, matches no source id, and the guard is BYPASSED for that source);
+    # derive_val_excluded_source_ids reports this case separately.
     assert strip_composite_copy_suffix("bare_source_id") == "bare_source_id"
-    assert strip_composite_copy_suffix("id_v100") == "id_v100"  # 3 haneli indeks desene UYMAZ
+    assert strip_composite_copy_suffix("id_v100") == "id_v100"  # a 3-digit index does NOT match the pattern
 
 
 def test_derive_val_excluded_source_ids_from_val_stems_list():
     val_stems = ["camo_00365_v03", "trans1_o00", "hair_0042_v00", "hair_0042_v01"]
     excluded, unmatched = derive_val_excluded_source_ids(val_stems)
-    # aynı kaynağın birden çok kopyası (hair_0042_v00/_v01) TEK bir kaynak id'e düşer.
+    # multiple copies of the same source (hair_0042_v00/_v01) collapse to a SINGLE source id.
     assert excluded == {"camo_00365", "trans1", "hair_0042"}
     assert unmatched == []
 
 
 def test_derive_val_excluded_source_ids_reports_unmatched_stems():
-    # Son ek deseniyle eşleşmeyen stem'ler koruma-baypas TEŞHİSİ için ayrıca
-    # döndürülmeli — v3 hücresi (stage_composites_o) boş-olmayan listede yüksek
-    # sesli uyarı basar (reviewer bulgusu #3).
-    val_stems = ["a_v00", "garip_stem", "b_o00", "id_v100"]
+    # Stems that do not match the suffix pattern must also be returned for the
+    # guard-bypass DIAGNOSIS — the v3 cell (stage_composites_o) prints a loud
+    # warning on a non-empty list (reviewer finding #3).
+    val_stems = ["a_v00", "weird_stem", "b_o00", "id_v100"]
     excluded, unmatched = derive_val_excluded_source_ids(val_stems)
-    assert unmatched == ["garip_stem", "id_v100"]
+    assert unmatched == ["weird_stem", "id_v100"]
     assert {"a", "b"} <= excluded
-    # eşleşmeyenler kümeye SON EKLİ/yanlış haliyle girer (dokümante davranış) —
-    # kaynak manifest'te bu id'ler bulunmayacağından koruma onlar için baypas.
-    assert "garip_stem" in excluded
+    # non-matching stems enter the set in their SUFFIXED/wrong form (documented
+    # behavior) — since these ids do not exist in the source manifest, the guard
+    # is bypassed for them.
+    assert "weird_stem" in excluded
     assert "id_v100" in excluded
 
 
@@ -701,13 +707,13 @@ def test_merge_composite_manifest_appends_only_new_ids(tmp_path):
     local = tmp_path / "local_o00_manifest.jsonl"
     drive = tmp_path / "drive_composites_manifest.jsonl"
 
-    # Drive'da ZATEN v1/v2'nin _v<NN> satırları var.
+    # Drive ALREADY contains v1/v2's _v<NN> rows.
     drive_rows = [
         {"id": "a_v00", "image": "im/a_v00.jpg", "category": "transparent", "gt_alpha": "gt/a_v00.png"},
     ]
     drive.write_text("\n".join(json.dumps(r) for r in drive_rows) + "\n")
 
-    # Yerelde yalnız yeni _o00 satırları var.
+    # Locally there are only the new _o00 rows.
     local_rows = [
         {"id": "a_o00", "image": "im/a_o00.jpg", "category": "transparent", "gt_alpha": "gt/a_o00.png"},
         {"id": "b_o00", "image": "im/b_o00.jpg", "category": "hair", "gt_alpha": "gt/b_o00.png"},
@@ -718,7 +724,7 @@ def test_merge_composite_manifest_appends_only_new_ids(tmp_path):
     assert n_added == 2
 
     merged_ids = [json.loads(line)["id"] for line in drive.read_text().splitlines() if line.strip()]
-    assert merged_ids == ["a_v00", "a_o00", "b_o00"]  # eski satırlar KORUNDU, yeni satırlar EKLENDİ
+    assert merged_ids == ["a_v00", "a_o00", "b_o00"]  # old rows PRESERVED, new rows APPENDED
 
 
 def test_merge_composite_manifest_idempotent_second_call_adds_nothing(tmp_path):
@@ -732,7 +738,7 @@ def test_merge_composite_manifest_idempotent_second_call_adds_nothing(tmp_path):
     assert n1 == 1
     assert n2 == 0
     merged_ids = [json.loads(line)["id"] for line in drive.read_text().splitlines() if line.strip()]
-    assert merged_ids == ["a_o00"]  # tekrar yok
+    assert merged_ids == ["a_o00"]  # no duplicates
 
 
 def test_merge_composite_manifest_missing_local_returns_zero(tmp_path):
@@ -743,30 +749,31 @@ def test_merge_composite_manifest_missing_local_returns_zero(tmp_path):
 
 
 # ============================================================================
-# 7c) boş-manifest guard'ı (ensure_manifest_pairs) — canlı v3 koşusu dersi:
-#     ham veri inmemişken manifest 0 çiftle kuruldu, hata ancak export'ta
-#     (SEMPTOM olarak) göründü; guard NEDENİ manifest kurulumunda yakalar.
+# 7c) empty-manifest guard (ensure_manifest_pairs) — lesson from the live v3
+#     run: the manifest was built with 0 pairs while the raw data had never
+#     downloaded, and the failure only surfaced at export (as a SYMPTOM);
+#     the guard catches the CAUSE at manifest setup.
 # ============================================================================
 def test_ensure_manifest_pairs_returns_count_when_nonempty(tmp_path):
     manifest = tmp_path / "manifest.jsonl"
     rows = [
         {"id": "a", "image": "im/a.jpg", "category": "transparent", "gt_alpha": "gt/a.png"},
         {"id": "b", "image": "im/b.jpg", "category": "hair", "gt_alpha": "gt/b.png"},
-        {"id": "c", "image": "im/c.jpg", "category": "product", "gt_alpha": None},  # GT'siz -> sayılmaz
+        {"id": "c", "image": "im/c.jpg", "category": "product", "gt_alpha": None},  # no GT -> not counted
     ]
     manifest.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
     assert ensure_manifest_pairs(manifest) == 2
 
 
 def test_ensure_manifest_pairs_raises_on_missing_file(tmp_path):
-    with pytest.raises(RuntimeError, match="manifest dosyası yok"):
-        ensure_manifest_pairs(tmp_path / "yok.jsonl")
+    with pytest.raises(RuntimeError, match="manifest file missing"):
+        ensure_manifest_pairs(tmp_path / "missing.jsonl")
 
 
 def test_ensure_manifest_pairs_raises_on_empty_manifest(tmp_path):
     manifest = tmp_path / "manifest.jsonl"
-    manifest.write_text("")  # 0 satır — canlı koşudaki durum
-    with pytest.raises(RuntimeError, match="GEÇİLMEYECEK"):
+    manifest.write_text("")  # 0 rows — the situation from the live run
+    with pytest.raises(RuntimeError, match="NOT proceeding to export"):
         ensure_manifest_pairs(manifest)
 
 
@@ -774,15 +781,15 @@ def test_ensure_manifest_pairs_raises_when_all_rows_lack_gt(tmp_path):
     manifest = tmp_path / "manifest.jsonl"
     rows = [{"id": "a", "image": "im/a.jpg", "category": "product", "gt_alpha": None}]
     manifest.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
-    with pytest.raises(RuntimeError, match="0 GT'li çift"):
+    with pytest.raises(RuntimeError, match="only 0 pairs with GT"):
         ensure_manifest_pairs(manifest)
 
 
 # ============================================================================
-# 7b) _o00 uçtan uca simülasyon: küçük bir fixture üzerinde make_composites.run()
-#     -> exclude_source_ids (val_stems.json'dan türetilen) -> merge_composite_
-#     manifest ile Drive manifestine merge -- v3_veri_guncelleme_hucresi.py'nin
-#     composites_o + drive_copy aşamalarının hermetik simülasyonu.
+# 7b) _o00 end-to-end simulation: make_composites.run() on a small fixture
+#     -> exclude_source_ids (derived from val_stems.json) -> merge into the
+#     Drive manifest with merge_composite_manifest -- a hermetic simulation of
+#     the composites_o + drive_copy stages of v3_veri_guncelleme_hucresi.py.
 # ============================================================================
 def test_o00_end_to_end_simulation_with_val_exclusion_and_drive_merge(tmp_path):
     import sys
@@ -811,20 +818,20 @@ def test_o00_end_to_end_simulation_with_val_exclusion_and_drive_merge(tmp_path):
         })
     append_entries(str(source_manifest), rows)
 
-    # val_stems.json: kaynak "a"nın BİR _v kopyası VAL'e düşmüş -- "a" tamamen
-    # hariç tutulmalı (make_composites hâlâ _v'ler için "a"yı işler, ama _o00
-    # üretiminden dışlanır).
-    # Boş-manifest guard'ı (v3 hücresinin "manifest" aşaması sonu — canlı koşu
-    # dersi): dolu kaynak manifest'te guard GEÇER ve GT'li çift sayısını döner;
-    # boş/eksik manifest'te (ham veri inmemiş senaryosu) RuntimeError fırlatıp
-    # composites_o/export'a GEÇİLMESİNİ engeller.
+    # val_stems.json: ONE _v copy of source "a" landed in VAL -- "a" must be
+    # excluded entirely (make_composites still processes "a" for the _v copies,
+    # but it is excluded from _o00 generation).
+    # Empty-manifest guard (end of the v3 cell's "manifest" stage — live-run
+    # lesson): on a populated source manifest the guard PASSES and returns the
+    # GT'd pair count; on an empty/missing manifest (raw data never downloaded
+    # scenario) it raises RuntimeError and blocks PROCEEDING to composites_o/export.
     assert ensure_manifest_pairs(source_manifest) == 3
     empty_manifest = tmp_path / "empty_manifest.jsonl"
     empty_manifest.write_text("")
-    with pytest.raises(RuntimeError, match="GEÇİLMEYECEK"):
+    with pytest.raises(RuntimeError, match="NOT proceeding to export"):
         ensure_manifest_pairs(empty_manifest)
-    with pytest.raises(RuntimeError, match="manifest dosyası yok"):
-        ensure_manifest_pairs(tmp_path / "hic_kurulmadi.jsonl")
+    with pytest.raises(RuntimeError, match="manifest file missing"):
+        ensure_manifest_pairs(tmp_path / "never_created.jsonl")
 
     val_stems = ["a_v03"]
     excluded, unmatched = derive_val_excluded_source_ids(val_stems)
@@ -836,30 +843,30 @@ def test_o00_end_to_end_simulation_with_val_exclusion_and_drive_merge(tmp_path):
         source_manifest, bg_dir, per_image=1, seed=42, out_dir=out_dir,
         exclude_source_ids=excluded, only_original_bg=True,
     )
-    # yalnız b ve c için _o00 üretildi (a hariç tutuldu); toplam = eligible x ORIGINAL_BG_COPIES.
+    # _o00 was generated only for b and c ("a" was excluded); total = eligible x ORIGINAL_BG_COPIES.
     assert sum(counts.values()) == 2 * mc.ORIGINAL_BG_COPIES
     from benchmark.testset import load_manifest
     o00_ids = {r["id"] for r in load_manifest(str(out_dir / "manifest.jsonl"))}
     assert o00_ids == {"b_o00", "c_o00"}
 
-    # Drive tarafı: v1/v2'nin _v<NN> satırlarını zaten içeren bir manifest'e merge.
+    # Drive side: merge into a manifest that already contains v1/v2's _v<NN> rows.
     drive_manifest = tmp_path / "drive_train_composites_manifest.jsonl"
     drive_manifest.write_text(json.dumps(
         {"id": "a_v00", "image": "im/a_v00.jpg", "category": "transparent", "gt_alpha": "gt/a_v00.png"}
     ) + "\n")
     n_added = merge_composite_manifest(out_dir / "manifest.jsonl", drive_manifest)
-    assert n_added == 2  # yalnız yeni _o00 satırları eklendi
+    assert n_added == 2  # only the new _o00 rows were appended
 
     final_ids = [json.loads(line)["id"] for line in drive_manifest.read_text().splitlines() if line.strip()]
     assert set(final_ids) == {"a_v00", "b_o00", "c_o00"}
 
-    # idempotentlik: aynı merge tekrar çağrılırsa 0 satır eklenir.
+    # idempotency: calling the same merge again appends 0 rows.
     assert merge_composite_manifest(out_dir / "manifest.jsonl", drive_manifest) == 0
 
 
-# 1c-3) v5 sampler preset (v4 benchmark + hayaletleşme bulgusu sonrası:
-# transparent/hair geri yükseltildi, fx/text/illustration kazanım-koruma payına
-# çekildi — bkz. SAMPLER_PRESET_V5 docstring'i).
+# 1c-3) v5 sampler preset (after the v4 benchmark + the ghosting finding:
+# transparent/hair restored, fx/text/illustration pulled back to a
+# gain-protection share — see the SAMPLER_PRESET_V5 docstring).
 def test_sampler_preset_v5():
     assert abs(sum(SAMPLER_PRESET_V5.values()) - 1.0) < 1e-9
     assert set(SAMPLER_PRESET_V5) == {
@@ -867,7 +874,7 @@ def test_sampler_preset_v5():
         "text", "fx", "illustration",
     }
     from training.train_colab_lib import SAMPLER_PRESET_V4 as V4
-    # yönler: transparent ve hair GERİ YÜKSELDİ, fx/text/illustration DÜŞTÜ
+    # directions: transparent and hair RESTORED UP, fx/text/illustration DOWN
     assert SAMPLER_PRESET_V5["transparent"] > V4["transparent"]
     assert SAMPLER_PRESET_V5["hair"] > V4["hair"]
     assert SAMPLER_PRESET_V5["fx"] < V4["fx"]
@@ -876,13 +883,13 @@ def test_sampler_preset_v5():
 
 
 # ============================================================================
-# 8) TRAIN verisinin tar shard'larına paketlenmesi — split_stems_to_shards /
-#    tar_shard_name / validate_tar_manifest (paketleyen: training/
-#    veri_tar_paketleme_hucresi.py, tüketen: train_colab.ipynb hücre (c)).
+# 8) Packing the TRAIN data into tar shards — split_stems_to_shards /
+#    tar_shard_name / validate_tar_manifest (packer: training/
+#    veri_tar_paketleme_hucresi.py, consumer: train_colab.ipynb cell (c)).
 # ============================================================================
 def test_split_stems_to_shards_is_deterministic_regardless_of_input_order():
-    # Dosya sistemi listeleme sırası koşudan koşuya değişebilir — bölme SIRALI
-    # ve DETERMİNİSTİK olmalı (idempotent shard atlama ancak böyle mümkün).
+    # Filesystem listing order can vary from run to run — the split must be
+    # ORDERED and DETERMINISTIC (idempotent shard skipping is only possible that way).
     import random
 
     stems = [f"s_{i:05d}" for i in range(100)]
@@ -895,9 +902,9 @@ def test_split_stems_to_shards_is_deterministic_regardless_of_input_order():
 def test_split_stems_to_shards_preserves_total_and_chunk_sizes():
     stems = [f"s_{i:05d}" for i in range(25)]
     shards = split_stems_to_shards(stems, 7)
-    assert [len(s) for s in shards] == [7, 7, 7, 4]  # son dilim kısa olabilir
+    assert [len(s) for s in shards] == [7, 7, 7, 4]  # the last slice may be short
     flat = [x for sh in shards for x in sh]
-    assert flat == sorted(stems)  # toplam KORUNUR: kayıp yok, tekrar yok, sıralı
+    assert flat == sorted(stems)  # total PRESERVED: no loss, no duplication, sorted
 
 
 def test_split_stems_to_shards_empty_list_gives_no_shards():
@@ -912,8 +919,8 @@ def test_split_stems_to_shards_rejects_non_positive_shard_size():
 
 
 def test_split_stems_to_shards_real_dataset_size_gives_about_eight_shards():
-    # Gerçek veri seti boyutu (52.882 çift) + paketleme hücresinin SHARD_SIZE=7000
-    # değeri -> görev hedefi ~8 shard, shard başına ~6-7k çift.
+    # The real dataset size (52,882 pairs) + the packing cell's SHARD_SIZE=7000
+    # value -> the task target of ~8 shards, ~6-7k pairs per shard.
     shards = split_stems_to_shards([f"{i:06d}" for i in range(52_882)], 7000)
     assert len(shards) == 8
     assert [len(s) for s in shards] == [7000] * 7 + [52_882 - 7 * 7000]
@@ -948,15 +955,15 @@ def test_validate_tar_manifest_ok_returns_total():
 
 def test_validate_tar_manifest_raises_on_shard_sum_mismatch():
     manifest = _valid_tar_manifest()
-    manifest["total_pairs"] = 6  # shard toplamı 5
-    with pytest.raises(RuntimeError, match="uyuşmuyor"):
+    manifest["total_pairs"] = 6  # shard sum is 5
+    with pytest.raises(RuntimeError, match="does not match"):
         validate_tar_manifest(manifest)
 
 
 def test_validate_tar_manifest_raises_on_expected_total_mismatch():
-    # Paketleme hücresi kaynak TRAIN listeleme uzunluğunu geçirir — görev şartı:
-    # toplam çift sayısı TRAIN listesiyle eşleşmiyorsa RuntimeError.
-    with pytest.raises(RuntimeError, match="beklenen kaynak çift sayısı"):
+    # The packing cell passes the source TRAIN listing length — task requirement:
+    # if the total pair count does not match the TRAIN listing, RuntimeError.
+    with pytest.raises(RuntimeError, match="expected source pair count"):
         validate_tar_manifest(_valid_tar_manifest(), expected_total=52_882)
 
 
@@ -980,11 +987,11 @@ def test_validate_tar_manifest_raises_on_broken_shard_entry():
     for broken in (
         {"name": "TRAIN_shard_00.tar", "pairs": 0, "bytes": 111},   # pairs <= 0
         {"name": "TRAIN_shard_00.tar", "pairs": 5, "bytes": 0},     # bytes <= 0
-        {"pairs": 5, "bytes": 111},                                  # name yok
-        {"name": "TRAIN_shard_00.tar", "bytes": 111},                # pairs yok
+        {"pairs": 5, "bytes": 111},                                  # no name
+        {"name": "TRAIN_shard_00.tar", "bytes": 111},                # no pairs
     ):
         manifest = {"total_pairs": 5, "shards": [broken]}
-        with pytest.raises(RuntimeError, match="bozuk shard girdisi"):
+        with pytest.raises(RuntimeError, match="corrupt shard entry"):
             validate_tar_manifest(manifest)
 
 
@@ -996,29 +1003,30 @@ def test_validate_tar_manifest_raises_on_duplicate_shard_names():
             {"name": "TRAIN_shard_00.tar", "pairs": 2, "bytes": 20},
         ],
     }
-    with pytest.raises(RuntimeError, match="tekrar eden shard adları"):
+    with pytest.raises(RuntimeError, match="duplicate shard names"):
         validate_tar_manifest(manifest)
 
 
 # ============================================================================
-# 8b) Drift guard: training/veri_tar_paketleme_hucresi.py, paste-run tasarımı
-#     gereği (repo klonu gerektirmesin diye) bu üç fonksiyonu lib'den BİREBİR
-#     KOPYA taşır — kopya lib'deki kaynaktan saparsa bu test kırmızıya döner
-#     (tek doğruluk kaynağı: training/train_colab_lib.py).
+# 8b) Drift guard: by its paste-run design (so it does not require a repo
+#     clone), training/veri_tar_paketleme_hucresi.py carries VERBATIM COPIES
+#     of these three functions from the lib — if a copy drifts from the source
+#     in the lib, this test turns red (single source of truth:
+#     training/train_colab_lib.py).
 # ============================================================================
 _LIB_PATH = Path(__file__).resolve().parent.parent / "training" / "train_colab_lib.py"
 _PACKER_CELL_PATH = Path(__file__).resolve().parent.parent / "training" / "veri_tar_paketleme_hucresi.py"
 
 
 def _function_def(path: Path, name: str) -> ast.FunctionDef:
-    # DİKKAT: paketleme hücresi import EDİLEMEZ (paste-run — modül import'u
-    # main()'i, dolayısıyla drive.mount'u çalıştırırdı); yalnız kaynak metin
-    # ast ile ayrıştırılır.
+    # CAUTION: the packing cell CANNOT be imported (paste-run — importing the
+    # module would execute main(), and therefore drive.mount); only its source
+    # text is parsed with ast.
     tree = ast.parse(path.read_text(encoding="utf-8"))
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name == name:
             return node
-    raise AssertionError(f"{path} içinde fonksiyon bulunamadı: {name}")
+    raise AssertionError(f"function not found in {path}: {name}")
 
 
 @pytest.mark.parametrize("func_name", ["tar_shard_name", "split_stems_to_shards", "validate_tar_manifest"])
@@ -1026,12 +1034,12 @@ def test_packer_cell_copies_match_lib_source(func_name):
     lib_node = _function_def(_LIB_PATH, func_name)
     cell_node = _function_def(_PACKER_CELL_PATH, func_name)
     assert ast.dump(cell_node) == ast.dump(lib_node), (
-        f"{func_name}: paketleme hücresindeki kopya lib'den SAPMIŞ — "
-        f"tek doğruluk kaynağı training/train_colab_lib.py, kopyayı oradan güncelleyin."
+        f"{func_name}: the copy in the packing cell has DRIFTED from the lib — "
+        f"the single source of truth is training/train_colab_lib.py; update the copy from there."
     )
 
 
-# 1c-4) v7 sampler preset (issue #2: design kategorisi — bkz. docstring).
+# 1c-4) v7 sampler preset (issue #2: the design category — see the docstring).
 def test_sampler_preset_v7():
     assert abs(sum(SAMPLER_PRESET_V7.values()) - 1.0) < 1e-9
     assert SAMPLER_PRESET_V7["design"] == 0.08

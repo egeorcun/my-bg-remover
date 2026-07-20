@@ -1,22 +1,22 @@
-# Eğitim döngüsü hücresi — ACİL düzeltme (autocast/BCE çökmesi)
+# Training loop cell — URGENT fix (autocast/BCE crash)
 
-**Ne yapılacak:** Colab'da açık olan `training/train_colab.ipynb` içindeki
-**eğitim döngüsü hücresinin** (Faz (g) — "Eğitim Döngüsü") içeriğini **SİL**,
-aşağıdaki kod bloğunun TAMAMINI olduğu gibi o hücreye **yapıştır**, ve
-**yalnızca bu hücreyi** yeniden çalıştır.
+**What to do:** In `training/train_colab.ipynb` open in Colab, **DELETE** the
+contents of the **training loop cell** (Phase (g) — "Training Loop"),
+**paste** the ENTIRE code block below into that cell as-is, and re-run
+**only this cell**.
 
-**ÖNCEKİ HÜCRELERİ TEKRAR ÇALIŞTIRMA** — model, optimizer, veri yükleyiciler
-ve checkpoint/resume durumu zaten bellekte; hücreleri baştan çalıştırmak
-resume durumunu bozabilir / gereksiz yeniden yükleme yapar.
+**DO NOT RE-RUN THE EARLIER CELLS** — the model, optimizer, data loaders and
+checkpoint/resume state are already in memory; re-running the cells from
+scratch may break the resume state / triggers needless reloading.
 
-**Neden çöktü:** `torch.nn.BCELoss()` (gdt kaybı) autocast(bf16) bloğu
-içinde çağrılıyordu — PyTorch bunu güvensiz kabul edip hata fırlatıyor.
-Aşağıdaki düzeltme, gdt kaybını VE `pix_loss` çağrısını (resmi BiRefNet
-`PixLoss`'un içindeki `bce` bileşeni de aynı ham `BCELoss` desenini
-kullandığı için) `torch.autocast(..., enabled=False)` ile fp32'ye
-yükseltilmiş girdilerle hesaplıyor. Matematik AYNI — yalnızca bu iki kayıp
-çağrısı artık fp32'de çalışıyor; model forward'ı (asıl ağır hesap) yine
-bf16 autocast altında kalıyor.
+**Why it crashed:** `torch.nn.BCELoss()` (the gdt loss) was being called
+inside the autocast(bf16) block — PyTorch considers this unsafe and raises
+an error. The fix below computes the gdt loss AND the `pix_loss` call
+(because the `bce` component inside the official BiRefNet `PixLoss` uses the
+same raw `BCELoss` pattern) with inputs upcast to fp32 via
+`torch.autocast(..., enabled=False)`. The math is THE SAME — only these two
+loss calls now run in fp32; the model forward (the real heavy compute) still
+stays under bf16 autocast.
 
 ```python
 import time
@@ -26,7 +26,7 @@ STATUS_DIR = Path(DRIVE_ROOT) / DRIVE_STATUS_SUBDIR
 TRAIN_LOG_PATH = STATUS_DIR / "train_log.txt"
 STATUS_DIR.mkdir(parents=True, exist_ok=True)
 
-UNITS_PER_HOUR_A100 = 13  # yaklaşık (Colab A100 ~11-13 birim/saat); kesin değeri Colab'ın "Kaynaklar" panelinden doğrulayın.
+UNITS_PER_HOUR_A100 = 13  # approximate (Colab A100 ~11-13 units/hour); verify the exact value in Colab's "Resources" panel.
 
 
 def log_epoch_row(epoch: int, loss: float, lr_now: float, elapsed_sec: float, eval_mae: float | None) -> None:
@@ -34,46 +34,46 @@ def log_epoch_row(epoch: int, loss: float, lr_now: float, elapsed_sec: float, ev
     if eval_mae is not None:
         row += f"\teval_mae={eval_mae:.6f}"
     print(row)
-    # Drive'a log yazımı best-effort: geçici bir Drive I/O hatası eğitimi ÖLDÜRMEMELİ
-    # (satır konsola zaten basıldı; bir sonraki epoch'un satırı yine denenecek).
+    # Writing the log to Drive is best-effort: a transient Drive I/O error must NOT KILL
+    # training (the row was already printed to the console; the next epoch's row will be tried again).
     try:
         with open(TRAIN_LOG_PATH, "a") as f:
             f.write(row + "\n")
     except OSError as e:
-        print(f"  UYARI: train_log.txt'e yazılamadı ({e}) — eğitim devam ediyor, sonraki epoch'ta tekrar denenecek.")
+        print(f"  WARNING: could not write to train_log.txt ({e}) — training continues, will retry next epoch.")
 
 
 def save_and_sync_checkpoint(epoch: int) -> None:
-    raw_state = model.state_dict()  # torch.compile ise '_orig_mod.' önekli olabilir -- resmi train.py ile AYNI davranış
-                                     # (öneki KALDIRMADAN kaydeder); yükleme sırasında her zaman check_state_dict uygulanır.
+    raw_state = model.state_dict()  # with torch.compile it may carry the '_orig_mod.' prefix -- SAME behavior as the official train.py
+                                     # (saves WITHOUT removing the prefix); check_state_dict is always applied at load time.
     payload_out = {
         "model": raw_state,
         "optimizer": optimizer.state_dict(),
         "lr_scheduler": lr_scheduler.state_dict(),
         "epoch": epoch,
     }
-    # 1) ÖNCE yerel disk — bu her zaman başarılı olmalı (başarısızsa gerçek bir sorun var, hata yükselir).
+    # 1) Local disk FIRST — this must always succeed (if it fails there is a real problem, the error propagates).
     local_path = local_ckpt_dir / f"epoch_{epoch}.pth"
     torch.save(payload_out, local_path)
     tcl.prune_old_checkpoints(local_ckpt_dir, KEEP_LAST_N_CHECKPOINTS)
 
-    # 2) SONRA Drive — best-effort: geçici Drive I/O hatası (kota/senkron takılması)
-    # eğitimi öldürmez; yerel kopya güvende, bir SONRAKİ epoch yeni bir Drive
-    # kopyası deneyecek (en kötü durumda Drive 1 epoch geriden gelir).
+    # 2) THEN Drive — best-effort: a transient Drive I/O error (quota/sync stall)
+    # does not kill training; the local copy is safe, and the NEXT epoch will try a
+    # new Drive copy (in the worst case Drive lags 1 epoch behind).
     try:
         drive_path = drive_ckpt_dir / f"epoch_{epoch}.pth"
         shutil.copy2(local_path, drive_path)
         tcl.prune_old_checkpoints(drive_ckpt_dir, KEEP_LAST_N_CHECKPOINTS)
-        print(f"  checkpoint kaydedildi + Drive'a kopyalandı: {drive_path}")
+        print(f"  checkpoint saved + copied to Drive: {drive_path}")
     except OSError as e:
-        print(f"  UYARI: checkpoint Drive'a kopyalanamadı ({e}) — YEREL kopya güvende: {local_path}; "
-              f"sonraki epoch'ta yeniden denenecek.")
+        print(f"  WARNING: checkpoint could not be copied to Drive ({e}) — LOCAL copy is safe: {local_path}; "
+              f"will retry next epoch.")
 
 
 def train_one_epoch(epoch: int) -> float:
     model.train()
 
-    # --- Fine-tune hilesi: mutlak epoch numarasına göre TABANDAN yeniden hesapla (resume-güvenli, bkz. yukarıdaki not) ---
+    # --- Fine-tune trick: recompute FROM THE BASE according to the absolute epoch number (resume-safe, see the note above) ---
     pix_loss.lambdas_pix_last = dict(BASE_LAMBDAS_PIX_LAST)
     if tcl.should_apply_finetune_reweight(epoch, EPOCHS, config.finetune_last_epochs):
         n = epoch - (EPOCHS + config.finetune_last_epochs)
@@ -98,8 +98,8 @@ def train_one_epoch(epoch: int) -> float:
             if config.out_ref:
                 (outs_gdt_pred, outs_gdt_label), scaled_preds = scaled_preds
 
-        # neden: BCE (BCELoss / binary_cross_entropy) autocast altında yasak; resmi BiRefNet
-        # train.py/loss.py ile AYNI matematik, sadece bu blok (gdt + pix_loss) fp32’de hesaplanıyor.
+        # why: BCE (BCELoss / binary_cross_entropy) is forbidden under autocast; SAME math as the official
+        # BiRefNet train.py/loss.py, only this block (gdt + pix_loss) is computed in fp32.
         with torch.autocast(device_type="cuda", enabled=False):
             if config.out_ref:
                 loss_gdt = None
@@ -109,7 +109,7 @@ def train_one_epoch(epoch: int) -> float:
                     li = criterion_gdt(gp_i, gl_i)
                     loss_gdt = li if gi == 0 else loss_gdt + li
             loss_cls = 0.0 if None in class_preds_lst else cls_loss(class_preds_lst, class_labels)
-            # pix_loss (resmi PixLoss) da ’bce’ bileşeninde ham BCELoss kullanıyor -- aynı nedenle fp32’ye yükseltiliyor.
+            # pix_loss (the official PixLoss) also uses raw BCELoss in its 'bce' component -- upcast to fp32 for the same reason.
             scaled_preds_f = [sp.float() for sp in scaled_preds]
             loss_pix, _loss_dict_pix = pix_loss(scaled_preds_f, torch.clamp(gts, 0, 1).float(), pix_loss_lambda=1.0)
             loss = loss_pix + loss_cls
@@ -144,16 +144,16 @@ def main() -> None:
         log_epoch_row(epoch, avg_loss, current_lr, elapsed, eval_mae)
         save_and_sync_checkpoint(epoch)
 
-        # ÖLÇÜLMÜŞ maliyet raporu (parametre hücresindeki teorik tabloyla karşılaştırın):
+        # MEASURED cost report (compare with the theoretical table in the parameter cell):
         hours = elapsed / 3600
         est_units = hours * UNITS_PER_HOUR_A100
         remaining = EPOCHS - epoch
-        print(f"  MALİYET: bu epoch {hours:.2f} saat ≈ {est_units:.0f} birim "
-              f"(A100 ~{UNITS_PER_HOUR_A100} birim/saat varsayımıyla); "
-              f"kalan {remaining} epoch ≈ {remaining * hours:.1f} saat ≈ {remaining * est_units:.0f} birim. "
-              f"Bütçenizi aşacaksa şimdi durdurun — RESUME='auto' kaldığı yerden devam eder.")
+        print(f"  COST: this epoch {hours:.2f} hours ≈ {est_units:.0f} units "
+              f"(assuming A100 ~{UNITS_PER_HOUR_A100} units/hour); "
+              f"remaining {remaining} epochs ≈ {remaining * hours:.1f} hours ≈ {remaining * est_units:.0f} units. "
+              f"If it will exceed your budget, stop now — RESUME='auto' resumes from where it left off.")
 
-    print("EĞİTİM TAMAMLANDI.")
+    print("TRAINING COMPLETE.")
 
 
 try:
@@ -161,10 +161,10 @@ try:
 except Exception:
     tb = traceback.format_exc()
     print(tb)
-    try:  # FATAL kaydı da best-effort — Drive yazılamıyorsa asıl hatayı gölgelemesin.
+    try:  # the FATAL record is also best-effort — if Drive cannot be written, it must not overshadow the real error.
         with open(TRAIN_LOG_PATH, "a") as f:
             f.write(f"epoch=FATAL\ttraceback={tb!r}\n")
     except OSError as log_err:
-        print(f"UYARI: FATAL kaydı train_log.txt'e yazılamadı ({log_err}).")
+        print(f"WARNING: FATAL record could not be written to train_log.txt ({log_err}).")
     raise
 ```

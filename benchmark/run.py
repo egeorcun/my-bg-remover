@@ -1,4 +1,4 @@
-"""Benchmark koşucusu: modeller x manifest -> alpha PNG'ler + metrics.json."""
+"""Benchmark runner: models x manifest -> alpha PNGs + metrics.json."""
 import argparse
 import json
 from collections import defaultdict
@@ -73,8 +73,8 @@ def run_benchmark(
 
 
 def _merge_metrics(metrics_path: Path, new_result: dict) -> dict:
-    """Var olan metrics.json ile birleştir: bu koşuda olmayan modellerin
-    per_image/per_category/overall girdileri korunur, bu koşudakiler üzerine yazılır."""
+    """Merge with the existing metrics.json: per_image/per_category/overall entries
+    of models not in this run are preserved; entries from this run overwrite."""
     if not metrics_path.exists():
         return new_result
     try:

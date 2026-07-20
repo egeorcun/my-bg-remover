@@ -1,4 +1,4 @@
-"""Manifest tabanlı test seti. JSONL: id, image, category, gt_alpha (nullable)."""
+"""Manifest-based test set. JSONL: id, image, category, gt_alpha (nullable)."""
 import json
 
 CATEGORIES = {
@@ -11,9 +11,9 @@ _KEYS = {"id", "image", "category", "gt_alpha"}
 def _validate(row: dict) -> None:
     missing = _KEYS - set(row)
     if missing:
-        raise ValueError(f"eksik anahtar(lar): {sorted(missing)}")
+        raise ValueError(f"missing key(s): {sorted(missing)}")
     if row["category"] not in CATEGORIES:
-        raise ValueError(f"bilinmeyen kategori: {row['category']}")
+        raise ValueError(f"unknown category: {row['category']}")
 
 
 def load_manifest(path: str) -> list[dict]:
@@ -25,7 +25,7 @@ def load_manifest(path: str) -> list[dict]:
                 row = json.loads(line)
                 _validate(row)
                 if row["id"] in seen_ids:
-                    raise ValueError(f"tekrarlanan id: {row['id']}")
+                    raise ValueError(f"duplicate id: {row['id']}")
                 seen_ids.add(row["id"])
                 rows.append(row)
     return rows

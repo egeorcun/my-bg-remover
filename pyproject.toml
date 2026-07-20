@@ -39,7 +39,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["slow: gerçek model yükleyen yavaş testler"]
+markers = ["slow: slow tests that load real models"]
 
 [build-system]
 requires = ["hatchling"]

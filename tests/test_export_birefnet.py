@@ -31,10 +31,10 @@ def fake_manifest(tmp_path):
     manifest = tmp_path / "manifest.jsonl"
     rows = []
 
-    # (id, kategori, boyut, alpha_deger) — alpha 0.05<a<0.95 aralığı "soft" sayılır.
+    # (id, category, size, alpha_value) — the alpha range 0.05<a<0.95 counts as "soft".
     specs = [
         ("cam1", "camouflage", (20, 10), 200),  # 200/255=0.78 -> soft
-        ("cam2", "camouflage", (20, 10), 255),  # 1.0 -> hard (soft değil)
+        ("cam2", "camouflage", (20, 10), 255),  # 1.0 -> hard (not soft)
         ("trans1", "transparent", (30, 15), 128),  # 0.50 -> soft
         ("hair1", "hair", (16, 16), 0),  # 0.0 -> hard
     ]
@@ -87,7 +87,7 @@ def test_stats_resolution_percentiles(tmp_path, fake_manifest):
     out = tmp_path / "out"
     stats = eb.export(fake_manifest["manifest"], out, split_name="TRAIN")
     p = stats["resolution_short_side_percentiles"]
-    # kısa kenarlar: cam1/cam2 -> 10, trans1 -> 15, hair1 -> 16
+    # short sides: cam1/cam2 -> 10, trans1 -> 15, hair1 -> 16
     assert p["p10"] <= p["p50"] <= p["p90"]
     assert 10 <= p["p10"]
     assert p["p90"] <= 16
@@ -97,7 +97,7 @@ def test_stats_soft_alpha_ratio(tmp_path, fake_manifest):
     out = tmp_path / "out"
     stats = eb.export(fake_manifest["manifest"], out, split_name="TRAIN")
     ratios = stats["soft_alpha_ratio_by_category"]
-    assert ratios["camouflage"] == pytest.approx(0.5)  # cam1 soft(1.0) + cam2 hard(0.0) -> ort 0.5
+    assert ratios["camouflage"] == pytest.approx(0.5)  # cam1 soft(1.0) + cam2 hard(0.0) -> avg 0.5
     assert ratios["transparent"] == pytest.approx(1.0)
     assert ratios["hair"] == pytest.approx(0.0)
 
@@ -109,8 +109,8 @@ def test_export_idempotent_skips_existing(tmp_path, fake_manifest):
     mtime1 = img_path.stat().st_mtime_ns
     stats2 = eb.export(fake_manifest["manifest"], out, split_name="TRAIN")
     mtime2 = img_path.stat().st_mtime_ns
-    assert mtime1 == mtime2  # yeniden yazılmadı
-    assert stats2["total"] == 4  # stats yine de doğru hesaplanır
+    assert mtime1 == mtime2  # not rewritten
+    assert stats2["total"] == 4  # stats are still computed correctly
 
 
 def test_export_duplicate_stem_raises(tmp_path):
@@ -119,14 +119,14 @@ def test_export_duplicate_stem_raises(tmp_path):
     gt_dir = tmp_path / "src" / "gt"
     img_path, gt_path = _make_pair(img_dir, gt_dir, "dupA")
     row = {"id": "dup", "image": str(img_path), "category": "product", "gt_alpha": str(gt_path)}
-    # manuel olarak aynı id iki kez yazılır (append_entries kendi başına tekrar
-    # kontrolü yapmaz — load_manifest okurken "tekrarlanan id" hatası verir).
+    # the same id is written twice manually (append_entries does not do duplicate
+    # checking on its own — load_manifest raises a "duplicate id" error on read).
     with open(manifest, "w") as f:
         f.write(json.dumps(row) + "\n")
         f.write(json.dumps(row) + "\n")
 
     out = tmp_path / "out"
-    with pytest.raises(ValueError, match="tekrarlanan"):
+    with pytest.raises(ValueError, match="duplicate"):
         eb.export(manifest, out, split_name="TRAIN")
 
 

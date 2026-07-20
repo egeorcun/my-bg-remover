@@ -1,38 +1,40 @@
-"""BİTİRİCİ HÜCRE — `colab_devam_hucresi.py`'nin Stage 5'i (kompozit üretimi)
-28.281 hedefin ~26-27 bininde, dev boyutlu (Transparent-460 ×10 kopya ve/veya
-HIM2K genel görselleri, 100-246MP) foreground'lar Colab'ın 12GB RAM'ini
-tıkadığı ve kullanıcı hücreyi kesintiye uğrattığı için TAMAMLANAMADI.
+"""FINISHER CELL — Stage 5 (composite generation) of `colab_devam_hucresi.py`
+COULD NOT BE COMPLETED: at ~26-27k of the 28,281 target, giant foregrounds
+(Transparent-460 x10 copies and/or HIM2K general images, 100-246MP) clogged
+Colab's 12GB RAM and the user interrupted the cell.
 
-KULLANIM: Bu dosyanın TÜM içeriğini canlı Colab runtime'ında (repo zaten
-/content/my-bg-remover'da açılmış, Drive bağlı, `pip install -e .` yapılmış,
-data/train/manifest.jsonl ve data/backgrounds zaten hazır — Stage 0-4 daha
-önce `colab_devam_hucresi.py` tarafından tamamlanmış) yeni bir hücreye
-YAPIŞTIRIP çalıştırın.
+USAGE: PASTE the ENTIRE contents of this file into a new cell in the live
+Colab runtime (repo already checked out at /content/my-bg-remover, Drive
+mounted, `pip install -e .` done, data/train/manifest.jsonl and
+data/backgrounds already prepared — Stages 0-4 previously completed by
+`colab_devam_hucresi.py`) and run it.
 
-Neden `scripts/make_composites.py::run()` yeniden çağrılmıyor: `run()` yeni
-girdileri BELLEKTE `new_entries` listesinde biriktirip TEK bir toplu
-`append_entries` çağrısıyla (tüm kaynak satırlar işlendikten SONRA) dosyaya
-yazıyor — kesinti olursa o ana kadar diske YAZILMIŞ onbinlerce görsel/gt
-dosyası için manifest satırı asla eklenmez. `run()`'u aynen yeniden çağırmak,
-disk üzerinde zaten var olan dosyalar için (id manifest'te YOK diye)
-gereksiz yeniden üretime yol açar — hem zaman kaybı hem de aynı dev
-görsellerde tekrar takılma riski. Bu yüzden aşağıdaki "bitirici döngü" DOSYA
-varlığını (yalnız manifest'i değil) kontrol eder ve HER öğeden SONRA
-`append_entries` çağırır (kesintiye dayanıklı).
+Why `scripts/make_composites.py::run()` is not simply called again: `run()`
+accumulates new entries IN MEMORY in the `new_entries` list and writes them
+to the file with a SINGLE bulk `append_entries` call (AFTER all source rows
+are processed) — if interrupted, the manifest rows for the tens of thousands
+of image/gt files ALREADY WRITTEN to disk up to that point are never added.
+Calling `run()` again as-is would trigger needless regeneration for files
+that already exist on disk (because their ids are NOT in the manifest) —
+both a waste of time and a risk of getting stuck on the same giant images
+again. That is why the "finisher loop" below checks FILE existence (not just
+the manifest) and calls `append_entries` AFTER EVERY item (interruption
+resilient).
 
-Kritik değişmez (invariant): dev-boyut OLMAYAN öğeler için üretim yolu
-`make_composites.run()` ile BİREBİR aynı olmalı (aynı `_item_rng` alt-akışı,
-aynı `compose`/`augment` çağrı sırası) — aksi halde önceden üretilmiş ile
-yeni üretilen öğeler arasında istatistiksel tutarsızlık oluşur. Bunu sağlamak
-için tüm yardımcı fonksiyonlar `scripts/make_composites.py`'den import
-edilir, KOPYALANMAZ. Yalnız dev görseller (uzun kenar > 2048px) compose/augment
-ÖNCESİNDE küçültülür — bu öğeler için `run()` ile bit-birebir aynılık zaten
-İSTENMİYOR (asıl amaç budur: dev canvas'ları küçültüp RAM patlamasını önlemek).
+Critical invariant: for items that are NOT giant-sized, the generation path
+must be EXACTLY identical to `make_composites.run()` (same `_item_rng`
+substream, same `compose`/`augment` call order) — otherwise a statistical
+inconsistency arises between previously generated and newly generated items.
+To guarantee this, all helper functions are imported from
+`scripts/make_composites.py`, NOT COPIED. Only giant images (long side >
+2048px) are downscaled BEFORE compose/augment — for those items bit-exact
+identity with `run()` is deliberately NOT wanted (that is the whole point:
+shrink the giant canvases and prevent the RAM blow-up).
 
-Durum takibi: `colab_devam_hucresi.py` ile AYNI `report()` mekanizması
-kullanılır (`/content/drive/MyDrive/bg-remover-status/log.txt` + `status.json`).
-Aşama adları: `finisher` -> `export` -> `drive_copy` -> `ALL`. Beklenmeyen
-hata `stage="FATAL"` ile tam traceback raporlanır ve tekrar fırlatılır.
+Status tracking: the SAME `report()` mechanism as `colab_devam_hucresi.py`
+is used (`/content/drive/MyDrive/bg-remover-status/log.txt` + `status.json`).
+Stage names: `finisher` -> `export` -> `drive_copy` -> `ALL`. An unexpected
+error is reported with `stage="FATAL"` with the full traceback and re-raised.
 """
 
 import json
@@ -45,28 +47,29 @@ from pathlib import Path
 
 import PIL.Image
 
-# Transparent-460/HIM2K'da 100MP+ görseller var; PIL'in 179MP "decompression
-# bomb" hata eşiğini aşabiliyor. Veri güvenilir akademik setlerden geldiği
-# için limit kaldırılıyor (colab_devam_hucresi.py ile AYNI satır).
+# Transparent-460/HIM2K contain 100MP+ images; they can exceed PIL's 179MP
+# "decompression bomb" error threshold. Since the data comes from trusted
+# academic datasets, the limit is removed (SAME line as
+# colab_devam_hucresi.py).
 PIL.Image.MAX_IMAGE_PIXELS = None
 
 import numpy as np
 from PIL import Image
 
-# --- Sabitler (colab_devam_hucresi.py ile AYNI) --------------------------
+# --- Constants (SAME as colab_devam_hucresi.py) ---------------------------
 WORKDIR = "/content/my-bg-remover"
 DRIVE_ROOT = "/content/drive/MyDrive"
 DRIVE_OUTPUT_SUBDIR = "bg-remover-data"
 SEED = 42
-PER_IMAGE = 1  # stage5_make_composites'teki per_image=1 ile AYNI (drift önleme)
-MAX_LONG_SIDE = 2048  # bu kenardan uzun fg'ler compose/augment ÖNCESİ küçültülür
+PER_IMAGE = 1  # SAME as per_image=1 in stage5_make_composites (drift prevention)
+MAX_LONG_SIDE = 2048  # fgs longer than this are downscaled BEFORE compose/augment
 
 STATUS_DIR = Path(DRIVE_ROOT) / "bg-remover-status"
 LOG_PATH = STATUS_DIR / "log.txt"
 STATUS_PATH = STATUS_DIR / "status.json"
 
-# scripts/ bir paket değil — mutlak yolu sys.path'e ekliyoruz (colab_devam_hucresi.py
-# ile AYNI mantık, os.chdir'e bağımlı değil).
+# scripts/ is not a package — we add the absolute path to sys.path (SAME
+# logic as colab_devam_hucresi.py, independent of os.chdir).
 SCRIPTS_DIR = str(Path(WORKDIR) / "scripts")
 if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
@@ -75,14 +78,14 @@ from benchmark.testset import append_entries, load_manifest  # noqa: E402
 
 
 # ==========================================================================
-# Durum raporlama — colab_devam_hucresi.py'den VERBATIM (aynı mekanizma).
+# Status reporting — VERBATIM from colab_devam_hucresi.py (same mechanism).
 # ==========================================================================
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 def report(stage: str, status: str, **extra) -> None:
-    """log.txt'e satır ekler + status.json'u (history biriktirerek) yeniden yazar."""
+    """Appends a line to log.txt + rewrites status.json (accumulating history)."""
     STATUS_DIR.mkdir(parents=True, exist_ok=True)
     ts = _now()
     line = f"[{ts}] stage={stage} status={status}"
@@ -105,16 +108,17 @@ def report(stage: str, status: str, **extra) -> None:
 
 
 # ==========================================================================
-# Dev görsel küçültme — compose/augment ÖNCESİ, yalnız uzun kenar > 2048px.
+# Giant image downscale — BEFORE compose/augment, only if long side > 2048px.
 # ==========================================================================
 def downscale_giant(
     rgb: np.ndarray, alpha: np.ndarray, max_long_side: int = MAX_LONG_SIDE
 ) -> tuple[np.ndarray, np.ndarray, bool]:
-    """rgb+alpha'yı BİRLİKTE (aynı yeni boyuta) küçültür — rgb LANCZOS (kalite),
-    alpha `bgr/compositing.py::_resize_alpha` ile AYNI mode='F' + BILINEAR
-    deseni (float32 hassasiyeti korunur). Uzun kenar zaten <= max_long_side ise
-    hiçbir şey yapmadan (aynı nesneleri) döndürür -> dev-olmayan öğeler için
-    `make_composites.run()` ile bit-birebir aynılık BOZULMAZ."""
+    """Downscales rgb+alpha TOGETHER (to the same new size) — rgb via LANCZOS
+    (quality), alpha with the SAME mode='F' + BILINEAR pattern as
+    `bgr/compositing.py::_resize_alpha` (float32 precision preserved). If the
+    long side is already <= max_long_side, returns (the same objects) without
+    doing anything -> bit-exact identity with `make_composites.run()` is NOT
+    BROKEN for non-giant items."""
     h, w = rgb.shape[:2]
     long_side = max(h, w)
     if long_side <= max_long_side:
@@ -135,14 +139,14 @@ def downscale_giant(
 
 
 # ==========================================================================
-# Bitirici aşama — make_composites.run()'un kaldığı yerden, dev görselleri
-# küçülterek tamamlar. Yardımcılar mc modülünden import edilir (KOPYALANMAZ).
+# Finisher stage — completes make_composites.run() from where it left off,
+# downscaling giant images. Helpers are imported from the mc module (NOT COPIED).
 # ==========================================================================
 def stage_finisher() -> dict:
     report("finisher", "running")
     os.chdir(WORKDIR)
 
-    import make_composites as mc  # scripts/ sys.path'te
+    import make_composites as mc  # scripts/ is on sys.path
     from bgr.compositing import augment, compose
 
     manifest_path = Path("data/train/manifest.jsonl")
@@ -154,18 +158,18 @@ def stage_finisher() -> dict:
     out_img_dir.mkdir(parents=True, exist_ok=True)
     out_gt_dir.mkdir(parents=True, exist_ok=True)
 
-    # run() ile AYNI filtre/sıra (id/copy/seed sözleşmesi için şart).
+    # SAME filter/order as run() (required for the id/copy/seed contract).
     rows = [r for r in load_manifest(str(manifest_path)) if r.get("gt_alpha")]
 
     bg_paths = sorted(p for p in backgrounds_dir.iterdir() if p.suffix.lower() in mc.IMG_EXTS)
     if not bg_paths:
-        raise SystemExit(f"arka plan bulunamadı: {backgrounds_dir}")
+        raise SystemExit(f"no backgrounds found: {backgrounds_dir}")
 
     manifest_ids: set[str] = set()
     if out_manifest.exists():
         manifest_ids = {r["id"] for r in load_manifest(str(out_manifest))}
 
-    # beklenen toplam: kaynak manifestteki her satır için kategori çarpanına göre kopya sayısı.
+    # expected total: number of copies per source-manifest row according to the category multiplier.
     expected_total = sum(PER_IMAGE * mc.multiplier(r["category"]) for r in rows)
 
     counts: dict[str, int] = {}
@@ -179,8 +183,8 @@ def stage_finisher() -> dict:
         n_copies = PER_IMAGE * mc.multiplier(category)
         out_ids = [f"{row['id']}_v{ci:02d}" for ci in range(n_copies)]
 
-        # önce DİSK durumuna bak (yalnız manifest'e değil) — run()'un toplu-append
-        # açığını (dosya var, satır yok) burada onarıyoruz.
+        # look at the DISK state first (not just the manifest) — here we repair
+        # run()'s bulk-append gap (file exists, row does not).
         pending: list[tuple[str, Path, Path]] = []
         for out_id in out_ids:
             img_path = out_img_dir / f"{out_id}.jpg"
@@ -192,14 +196,14 @@ def stage_finisher() -> dict:
                 skipped += 1
                 continue
             if files_ok and not row_exists:
-                # dosyalar zaten yazılmış (önceki koşu kesintiye uğramış) -> yalnız satırı ekle.
+                # files already written (previous run was interrupted) -> only add the row.
                 entry = {"id": out_id, "image": str(img_path), "category": category, "gt_alpha": str(gt_path)}
                 append_entries(str(out_manifest), [entry])
                 manifest_ids.add(out_id)
                 reconciled += 1
                 continue
-            # dosyalar eksik -> üretilecek (satır olsun ya da olmasın; duplicate satır
-            # asla eklenmeyecek, aşağıda tekrar kontrol ediliyor).
+            # files missing -> to be generated (whether the row exists or not; a
+            # duplicate row will never be added, re-checked below).
             pending.append((out_id, img_path, gt_path))
 
         if not pending:
@@ -209,7 +213,7 @@ def stage_finisher() -> dict:
         alpha = mc._load_alpha(Path(row["gt_alpha"]), target_size=(fg_rgb.shape[1], fg_rgb.shape[0]))
 
         for out_id, img_path, gt_path in pending:
-            rng = mc._item_rng(SEED, out_id)  # run() ile AYNI alt-akış türetimi
+            rng = mc._item_rng(SEED, out_id)  # SAME substream derivation as run()
 
             item_fg_rgb, item_alpha, was_ds = downscale_giant(fg_rgb, alpha)
             if was_ds:
@@ -227,7 +231,7 @@ def stage_finisher() -> dict:
 
             if out_id not in manifest_ids:
                 entry = {"id": out_id, "image": str(img_path), "category": category, "gt_alpha": str(gt_path)}
-                append_entries(str(out_manifest), [entry])  # HER ÖGEDEN SONRA -> kesintiye dayanıklı
+                append_entries(str(out_manifest), [entry])  # AFTER EVERY ITEM -> interruption resilient
                 manifest_ids.add(out_id)
 
             counts[category] = counts.get(category, 0) + 1
@@ -243,13 +247,13 @@ def stage_finisher() -> dict:
             per_category_actual[r["category"]] = per_category_actual.get(r["category"], 0) + 1
 
     ok = actual_total == expected_total
-    print(f"Bitirici: {produced} yeni üretildi, {reconciled} satır onarıldı, {skipped} zaten tamdı.")
-    print(f"Dev boyut nedeniyle küçültülen öğe sayısı: {len(downscaled_ids)}")
-    print(f"Beklenen toplam: {expected_total}  Gerçek toplam (images/): {actual_total}  Eşleşiyor mu: {ok}")
+    print(f"Finisher: {produced} newly generated, {reconciled} rows repaired, {skipped} already complete.")
+    print(f"Items downscaled due to giant size: {len(downscaled_ids)}")
+    print(f"Expected total: {expected_total}  Actual total (images/): {actual_total}  Match: {ok}")
     for cat, c in sorted(per_category_actual.items()):
         print(f"  {cat}: {c}")
     if not ok:
-        print("UYARI: beklenen ve gerçek toplam eşleşmiyor — export'a geçmeden önce incele.")
+        print("WARNING: expected and actual totals do not match — inspect before proceeding to export.")
 
     report(
         "finisher", "done",
@@ -264,11 +268,11 @@ def stage_finisher() -> dict:
 
 
 # ==========================================================================
-# Export + Drive kopyalama — colab_devam_hucresi.py Stage 6/7'den VERBATIM.
+# Export + Drive copy — VERBATIM from colab_devam_hucresi.py Stage 6/7.
 # ==========================================================================
 def stage6_export() -> dict:
     report("export", "running")
-    import export_birefnet as eb  # scripts/ sys.path'te
+    import export_birefnet as eb  # scripts/ is on sys.path
 
     stats = eb.export(
         manifest_path="data/train_composites/manifest.jsonl",
@@ -286,13 +290,13 @@ def stage7_drive_copy(stats: dict) -> None:
     dst = Path(DRIVE_ROOT) / DRIVE_OUTPUT_SUBDIR
     dst.mkdir(parents=True, exist_ok=True)
 
-    print(f"Kopyalanıyor: {src} -> {dst}")
+    print(f"Copying: {src} -> {dst}")
     shutil.copytree(src, dst, dirs_exist_ok=True)
 
     comp_manifest = Path("data/train_composites/manifest.jsonl")
     if comp_manifest.exists():
         shutil.copy2(comp_manifest, dst / "train_composites_manifest.jsonl")
-        print(f"Kompozit manifest de kopyalandı: {dst / 'train_composites_manifest.jsonl'}")
+        print(f"Composite manifest also copied: {dst / 'train_composites_manifest.jsonl'}")
 
     src_im = list((src / "TRAIN" / "im").iterdir())
     src_gt = list((src / "TRAIN" / "gt").iterdir())
@@ -302,20 +306,20 @@ def stage7_drive_copy(stats: dict) -> None:
     with open(src / "stats.json") as f:
         stats_on_disk = json.load(f)
 
-    print(f"im/: kaynak={len(src_im)}, hedef={len(dst_im)}")
-    print(f"gt/: kaynak={len(src_gt)}, hedef={len(dst_gt)}")
+    print(f"im/: source={len(src_im)}, destination={len(dst_im)}")
+    print(f"gt/: source={len(src_gt)}, destination={len(dst_gt)}")
     print(f"stats.json total: {stats_on_disk['total']}")
 
-    assert len(src_im) == len(dst_im), "im/ dosya sayısı Drive kopyasında eşleşmiyor!"
-    assert len(src_gt) == len(dst_gt), "gt/ dosya sayısı Drive kopyasında eşleşmiyor!"
-    assert len(dst_im) == len(dst_gt) == stats_on_disk["total"], "im/gt/stats.json toplam sayıları tutarsız!"
+    assert len(src_im) == len(dst_im), "im/ file count does not match in the Drive copy!"
+    assert len(src_gt) == len(dst_gt), "gt/ file count does not match in the Drive copy!"
+    assert len(dst_im) == len(dst_gt) == stats_on_disk["total"], "im/gt/stats.json totals are inconsistent!"
 
-    print("\nBÜTÜNLÜK KONTROLÜ BAŞARILI — veri Drive'da hazır.")
+    print("\nINTEGRITY CHECK PASSED — data is ready on Drive.")
     report("drive_copy", "done", im=len(dst_im), gt=len(dst_gt), total=stats_on_disk["total"])
 
 
 # ==========================================================================
-# Orkestrasyon — üst düzeyde koşar (hücre yapıştırılıp çalıştırıldığında).
+# Orchestration — runs at top level (when the cell is pasted and executed).
 # ==========================================================================
 def main() -> None:
     os.chdir(WORKDIR)

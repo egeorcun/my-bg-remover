@@ -1,4 +1,4 @@
-"""bgr CLI: uv run bgr remove girdi.jpg -o cikti.png"""
+"""bgr CLI: uv run bgr remove input.jpg -o output.png"""
 import argparse
 
 from PIL import Image
@@ -10,7 +10,7 @@ from bgr.registry import get_segmenter
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="bgr")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    rm = sub.add_parser("remove", help="arka planı sil")
+    rm = sub.add_parser("remove", help="remove the background")
     rm.add_argument("input")
     rm.add_argument("-o", "--output", required=True)
     rm.add_argument("--model", default="rmbg-2.0")
@@ -24,7 +24,7 @@ def main(argv: list[str] | None = None) -> None:
         pipe = PipelineSegmenter(pipe.base, refine=True)
     out = pipe.process(Image.open(a.input), decontaminate=not a.no_decontaminate)
     out.save(a.output)
-    print(f"kaydedildi: {a.output}")
+    print(f"saved: {a.output}")
 
 
 if __name__ == "__main__":

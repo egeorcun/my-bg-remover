@@ -1,16 +1,16 @@
-"""scripts/make_design.py testleri — küçük (<=128px) sahte kaynaklarla hızlı koşu.
+"""Tests for scripts/make_design.py — fast runs with small (<=128px) fake sources.
 
-Doğrulanan sözleşmeler (bkz. make_design modül docstring'i):
-- halftone/posterize/ink filtreleri alpha'yı DEĞİŞTİRMEZ (bit karşılaştırma),
-- duman eklemesi GT'ye yansır: nesne bbox'ı DIŞINDA 0.05-0.6 bandında piksel var,
-  nesne İÇİNDE duman 0,
-- zemin köşeleri GT'de 0 (MARGIN_FRAC kenar bandı garantisi),
-- kavisli yazı üretilir ve GT'ye işlenir,
-- determinizm (aynı seed bit-identical) + idempotentlik + manifest
-  {"id","category"} sözleşmesi ve `design_{i:05d}_c00` stem kalıbı.
+Contracts verified (see the make_design module docstring):
+- the halftone/posterize/ink filters DO NOT change the alpha (bit comparison),
+- added smoke shows up in the GT: pixels in the 0.05-0.6 band OUTSIDE the
+  object bbox, smoke is 0 INSIDE the object,
+- background corners are 0 in the GT (the MARGIN_FRAC edge band guarantee),
+- curved text is generated and lands in the GT,
+- determinism (same seed bit-identical) + idempotency + the manifest
+  {"id","category"} contract and the `design_{i:05d}_c00` stem pattern.
 
-make_textfx'in kendi testleri de yeşil kalmalı — make_design yalnız import eder,
-make_textfx'i DEĞİŞTİRMEZ.
+make_textfx's own tests must stay green too — make_design only imports it,
+it does NOT modify make_textfx.
 """
 import json
 import re
@@ -42,7 +42,7 @@ def _write_alpha(path: Path, arr: np.ndarray) -> None:
 
 @pytest.fixture
 def env(tmp_path):
-    """Sahte fg çiftleri (katı kare alpha) + ToonOut çiftleri."""
+    """Fake fg pairs (solid square alpha) + ToonOut pairs."""
     fg_root = tmp_path / "fg"
     for i in range(2):
         _write_solid(fg_root / "im" / f"obj{i}.jpg", (96, 96), (0, 180, 60))
@@ -63,10 +63,10 @@ def env(tmp_path):
 def _run(env, out_dir=None, seed=42, count=COUNT, **kw):
     return md.run(
         out_dir if out_dir is not None else env["out"],
-        bg_dir=None,  # kullanılmaz — zemin sentetik
+        bg_dir=None,  # unused — synthetic background
         fg_dirs=env["fg"],
         toonout_dir=env["toon"],
-        font_dir=None,  # PIL varsayılan fontuna düşer
+        font_dir=None,  # falls back to the PIL default font
         seed=seed,
         count=count,
         canvas_range=CANVAS,
@@ -84,18 +84,18 @@ def _pair_paths(out_dir: Path, stem: str) -> tuple[Path, Path]:
 
 
 # ==========================================================================
-# Baskı filtreleri — alpha bit-birebir korunur, RGB değişir
+# Print filters — the alpha is preserved bit-for-bit, the RGB changes
 # ==========================================================================
 @pytest.mark.parametrize("kind", ["halftone", "posterize", "ink"])
 def test_print_filter_preserves_alpha_bitwise(kind):
     rng = md._item_rng(42, f"filter_{kind}")
     rgb = rng.integers(0, 256, (64, 64, 3)).astype(np.uint8)
-    alpha = (rng.uniform(0, 1, (64, 64))).astype(np.float32)  # yumuşak değerli GT
+    alpha = (rng.uniform(0, 1, (64, 64))).astype(np.float32)  # soft-valued GT
     alpha_bytes = alpha.tobytes()
     rgb2, alpha2 = md.apply_print_filter(rgb, alpha, rng, kind)
-    assert alpha2.tobytes() == alpha_bytes  # bit karşılaştırma: alpha AYNEN
+    assert alpha2.tobytes() == alpha_bytes  # bit comparison: alpha AS IS
     assert rgb2.shape == rgb.shape and rgb2.dtype == np.uint8
-    assert not np.array_equal(rgb2, rgb)  # filtre gerçekten uygulanmış
+    assert not np.array_equal(rgb2, rgb)  # the filter was actually applied
 
 
 def test_print_filter_none_is_identity():
@@ -107,9 +107,9 @@ def test_print_filter_none_is_identity():
 
 
 def test_halftone_darker_means_more_ink():
-    """Tramın özü: koyu bölge daha çok mürekkep noktası üretir."""
+    """The essence of the screen: dark regions produce more ink dots."""
     rng1 = md._item_rng(1, "ht_dark")
-    rng2 = md._item_rng(1, "ht_dark")  # aynı akış -> aynı cell/ink seçimi
+    rng2 = md._item_rng(1, "ht_dark")  # same stream -> same cell/ink choice
     dark = np.full((64, 64, 3), 30, dtype=np.uint8)
     light = np.full((64, 64, 3), 225, dtype=np.uint8)
     out_d = md._filter_halftone(dark, rng1)
@@ -120,7 +120,7 @@ def test_halftone_darker_means_more_ink():
 
 
 # ==========================================================================
-# Duman — nesne dışına 0.05-0.6 bandı, nesne içinde 0
+# Smoke — a 0.05-0.6 band outside the object, 0 inside the object
 # ==========================================================================
 def test_smoke_alpha_band_outside_object():
     rng = md._item_rng(42, "smoke")
@@ -128,16 +128,16 @@ def test_smoke_alpha_band_outside_object():
     alpha[40:88, 40:88] = 1.0
     smoke = md._smoke_alpha(alpha, rng, reach_frac=0.1)
     assert smoke.shape == alpha.shape
-    assert float(smoke[alpha > 0.05].max(initial=0.0)) == 0.0  # nesne içi 0
+    assert float(smoke[alpha > 0.05].max(initial=0.0)) == 0.0  # 0 inside the object
     outside = smoke.copy()
     outside[40:88, 40:88] = 0.0
     band = (outside > 0.05) & (outside <= 0.6)
-    assert int(band.sum()) > 0  # bbox DIŞINDA 0.05-0.6 bandında duman var
+    assert int(band.sum()) > 0  # smoke in the 0.05-0.6 band OUTSIDE the bbox
     assert float(smoke.max()) <= md.SMOKE_HI + 1e-6
 
 
 # ==========================================================================
-# Kavisli yazı — yay geometrisi + GT'ye işlenme
+# Curved text — arc geometry + landing in the GT
 # ==========================================================================
 def _default_font():
     try:
@@ -155,24 +155,24 @@ def test_curved_text_arches_upward():
     n = len(cols)
     mid = tops[n // 3 : 2 * n // 3].min()
     edges = min(tops[: n // 6].max(initial=0), tops[-n // 6 :].max(initial=0))
-    assert mid < edges  # orta harfler yayın tepesinde (arch up)
+    assert mid < edges  # middle letters at the top of the arc (arch up)
 
 
 def test_curved_text_reaches_gt(env, monkeypatch):
-    """Yalnız yazı kalan bir kompozisyonda (özne/dekor/ışıma kapalı, kavis
-    zorunlu) GT sıfırdan farklıysa kavisli yazı GT'ye işlenmiş demektir."""
+    """In a composition where only text remains (subject/decor/glow disabled,
+    curve forced), a non-zero GT means the curved text landed in the GT."""
     monkeypatch.setattr(md, "CURVED_TEXT_PROB", 1.0)
     monkeypatch.setattr(md, "RAY_PROB", 0.0)
     monkeypatch.setattr(md, "DECOR_RANGE", (0, 0))
     rng = md._item_rng(7, "curved_gt")
     rgb, alpha = md._render_design_sample(rng, (128, 128), [], [], [])
     assert int((alpha > 0).sum()) > 0
-    # köşe bandı garantisi burada da geçerli
+    # the corner-band guarantee applies here too
     assert alpha[0, 0] == 0 and alpha[-1, -1] == 0
 
 
 # ==========================================================================
-# Tam koşu — manifest / stem / zemin / GT bandı
+# Full run — manifest / stem / background / GT band
 # ==========================================================================
 def test_run_generates_pairs_and_manifest(env):
     counts = _run(env)
@@ -198,22 +198,24 @@ def test_run_generates_pairs_and_manifest(env):
 
 
 def test_gt_corners_zero_and_bg_paperlike(env):
-    """Zemin GT'de alpha=0: kenar bandı garantisiyle köşeler her örnekte 0;
-    im köşeleri kağıt/pastel zeminin açık tonunda kalır."""
+    """The background is alpha=0 in the GT: with the edge-band guarantee the
+    corners are 0 in every sample; the im corners stay in the light tone of
+    the paper/pastel background."""
     _run(env)
     for row in _manifest_rows(env["out"]):
         img_path, gt_path = _pair_paths(env["out"], row["id"])
         a = np.asarray(Image.open(gt_path))
         for corner in (a[0, 0], a[0, -1], a[-1, 0], a[-1, -1]):
-            assert corner == 0, f"{row['id']}: GT köşesi 0 değil ({corner})"
+            assert corner == 0, f"{row['id']}: GT corner is not 0 ({corner})"
         rgb = np.asarray(Image.open(img_path))
         for corner in (rgb[0, 0], rgb[0, -1], rgb[-1, 0], rgb[-1, -1]):
-            assert corner.min() >= 160, f"{row['id']}: zemin köşesi açık ton değil {corner}"
+            assert corner.min() >= 160, f"{row['id']}: background corner is not a light tone {corner}"
 
 
 def test_gt_has_semi_transparent_band(env):
-    """Duman/ışıma/eskitme GT'ye yansır: kaynak alpha'lar tamamen katı (0/255)
-    olduğu halde üretilen GT'lerde 0.05-0.6 bandında piksel bulunur."""
+    """Smoke/glow/distress show up in the GT: even though the source alphas
+    are fully solid (0/255), the generated GTs contain pixels in the
+    0.05-0.6 band."""
     _run(env)
     found = False
     for row in _manifest_rows(env["out"]):
@@ -221,11 +223,11 @@ def test_gt_has_semi_transparent_band(env):
         if int(((arr > 0.05) & (arr <= 0.6)).sum()) > 0:
             found = True
             break
-    assert found, "hiçbir GT'de 0.05-0.6 bandında yarı saydam piksel yok"
+    assert found, "no GT contains semi-transparent pixels in the 0.05-0.6 band"
 
 
 # ==========================================================================
-# Determinizm + idempotentlik + resume
+# Determinism + idempotency + resume
 # ==========================================================================
 def test_deterministic_same_seed_bit_identical(env):
     counts1 = _run(env, out_dir=env["out"] / "a")
@@ -237,8 +239,8 @@ def test_deterministic_same_seed_bit_identical(env):
     for stem in ids1:
         img1, gt1 = _pair_paths(env["out"] / "a", stem)
         img2, gt2 = _pair_paths(env["out"] / "b", stem)
-        assert img1.read_bytes() == img2.read_bytes(), f"{stem}: aynı seed farklı image üretti"
-        assert gt1.read_bytes() == gt2.read_bytes(), f"{stem}: aynı seed farklı gt üretti"
+        assert img1.read_bytes() == img2.read_bytes(), f"{stem}: same seed produced a different image"
+        assert gt1.read_bytes() == gt2.read_bytes(), f"{stem}: same seed produced a different gt"
 
 
 def test_different_seed_changes_output(env):
@@ -253,13 +255,14 @@ def test_idempotent_skips_existing(env):
     counts1 = _run(env)
     assert counts1 == {"design": COUNT}
     counts2 = _run(env)
-    assert counts2 == {}  # ikinci koşuda hiçbir yeni öğe üretilmedi
-    assert len(_manifest_rows(env["out"])) == COUNT  # manifest'te tekrar yok
+    assert counts2 == {}  # nothing new was generated on the second run
+    assert len(_manifest_rows(env["out"])) == COUNT  # no duplicates in the manifest
 
 
 def test_file_exists_but_manifest_row_missing_gets_completed(env):
-    """Dosya kaydı ile manifest append'i arasında kesinti: dosyalar durur,
-    satır eksik — yeniden koşuda dosya ÜRETİLMEZ, yalnız satır tamamlanır."""
+    """Interruption between saving files and appending to the manifest: the
+    files remain, the line is missing — on re-run the file is NOT regenerated,
+    only the line is completed."""
     _run(env)
     manifest = env["out"] / "manifest.jsonl"
     rows = _manifest_rows(env["out"])
@@ -270,16 +273,17 @@ def test_file_exists_but_manifest_row_missing_gets_completed(env):
     manifest.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows[1:]))
 
     counts = _run(env)
-    assert counts == {}  # dosya zaten vardı -> üretim sayılmadı
+    assert counts == {}  # the file already existed -> not counted as generated
     after = _manifest_rows(env["out"])
     assert {r["id"] for r in after} == {r["id"] for r in rows}
     assert img_path.read_bytes() == before_bytes
-    assert img_path.stat().st_mtime_ns == before_mtime  # dosyaya hiç dokunulmadı
+    assert img_path.stat().st_mtime_ns == before_mtime  # the file was never touched
 
 
 def test_partial_then_resume_matches_full_run(env):
-    """Kesinti simülasyonu: bazı çiftler silinip yeniden koşulur — devam koşusu
-    kesintisiz koşuyla bit-birebir aynı dosyaları üretmeli."""
+    """Interruption simulation: some pairs are deleted and the run is
+    repeated — the resumed run must produce files bit-identical to an
+    uninterrupted run."""
     dir_full = env["out"] / "full"
     dir_resume = env["out"] / "resume"
     _run(env, out_dir=dir_full)
@@ -297,17 +301,17 @@ def test_partial_then_resume_matches_full_run(env):
     )
 
     counts = _run(env, out_dir=dir_resume)
-    assert counts == {"design": len(drop)}  # yalnız silinenler yeniden üretildi
+    assert counts == {"design": len(drop)}  # only the deleted ones were regenerated
 
     for stem in {r["id"] for r in _manifest_rows(dir_full)}:
         img_f, gt_f = _pair_paths(dir_full, stem)
         img_r, gt_r = _pair_paths(dir_resume, stem)
-        assert img_f.read_bytes() == img_r.read_bytes(), f"{stem}: devam koşusu image'ı farklı"
-        assert gt_f.read_bytes() == gt_r.read_bytes(), f"{stem}: devam koşusu gt'si farklı"
+        assert img_f.read_bytes() == img_r.read_bytes(), f"{stem}: resumed run image differs"
+        assert gt_f.read_bytes() == gt_r.read_bytes(), f"{stem}: resumed run gt differs"
 
 
 # ==========================================================================
-# Kaynak havuzu — zorunluluk + VAL hariç tutma
+# Source pool — requirement + VAL exclusion
 # ==========================================================================
 def test_design_requires_sources(env, tmp_path):
     with pytest.raises(SystemExit, match="design"):
@@ -316,8 +320,8 @@ def test_design_requires_sources(env, tmp_path):
 
 
 def test_exclude_fg_stems_removes_pool(env, tmp_path):
-    """Tüm kaynak stem'leri hariç tutulursa havuz boşalır -> SystemExit
-    (VAL sızıntı koruması fiilen fg seçiminde uygulanıyor)."""
+    """Excluding all source stems empties the pool -> SystemExit
+    (the VAL leak guard is effectively enforced in fg selection)."""
     with pytest.raises(SystemExit, match="design"):
         md.run(
             tmp_path / "o", fg_dirs=env["fg"], toonout_dir=env["toon"], seed=42,

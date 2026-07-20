@@ -19,7 +19,7 @@ def test_gallery_contains_rows_and_images(tmp_path):
     build_gallery(str(manifest), str(tmp_path / "results"), ["m1"], str(out))
     html = out.read_text()
     assert "hair" in html and 'id="a"' in html
-    # model hücresi ham maskeyi değil, RGBA kompoziti gömmeli
+    # the model cell must embed the RGBA composite, not the raw mask
     assert "m1/a" not in html
     assert "m1/composites/a" in html
     composite = tmp_path / "results/m1/composites/a.png"
@@ -41,7 +41,7 @@ def test_gallery_prefers_rgba_over_composite(tmp_path):
     out = tmp_path / "results/gallery.html"
     build_gallery(str(manifest), str(tmp_path / "results"), ["m1"], str(out))
     html = out.read_text()
-    # rgba varsa onu gömmeli, composite üretmemeli
+    # if rgba exists it must be embedded, no composite should be produced
     assert "m1/rgba/a" in html
     assert "m1/composites/a" not in html
     assert not (tmp_path / "results/m1/composites").exists()

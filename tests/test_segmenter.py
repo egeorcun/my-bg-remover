@@ -29,14 +29,14 @@ def test_birefnet_hr_alpha_contract(toy_image):
     assert alpha.dtype == np.float32
     assert alpha.shape == (480, 640)
     assert 0.0 <= alpha.min() and alpha.max() <= 1.0
-    # elipsin merkezi özne, köşe arka plan olmalı
+    # the ellipse center must be subject, the corner background
     assert alpha[240, 320] > 0.5
     assert alpha[10, 10] < 0.5
 
 
 class _FakeArch(torch.nn.Module):
-    """`from_pretrained` yerine geçen, gerçek state_dict/load_state_dict
-    davranışına sahip minik sahte mimari (hermetik testler için)."""
+    """Tiny fake architecture standing in for `from_pretrained`, with real
+    state_dict/load_state_dict behavior (for hermetic tests)."""
 
     def __init__(self):
         super().__init__()
@@ -51,7 +51,7 @@ def _patch_from_pretrained(fake_model):
 
 
 class TestLocalBiRefNetSegmenter:
-    """`torch.load`/`from_pretrained` mocklanır: 2.6GB gerçek checkpoint gerektirmez."""
+    """`torch.load`/`from_pretrained` are mocked: no 2.6GB real checkpoint required."""
 
     def test_unwraps_model_key_and_loads(self):
         fake_model = _FakeArch()
@@ -82,7 +82,7 @@ class TestLocalBiRefNetSegmenter:
             _patch_from_pretrained(fake_model),
             patch("torch.load", return_value=payload),
         ):
-            # önek temizlenmezse strict load_state_dict RuntimeError fırlatırdı
+            # if the prefix were not stripped, strict load_state_dict would raise RuntimeError
             LocalBiRefNetSegmenter(
                 ckpt_path="fake/epoch_1.pth", input_size=1024, name="bgr-v1"
             )
@@ -102,8 +102,8 @@ class TestLocalBiRefNetSegmenter:
     def test_strict_mismatch_raises_loudly_with_key_diff(self):
         fake_model = _FakeArch()
         bad_state = dict(fake_model.state_dict())
-        del bad_state["linear.bias"]  # eksik anahtar -> strict load başarısız olmalı
-        bad_state["extra.unexpected"] = torch.zeros(1)  # fazla anahtar
+        del bad_state["linear.bias"]  # missing key -> strict load must fail
+        bad_state["extra.unexpected"] = torch.zeros(1)  # unexpected key
         payload = {
             "model": bad_state,
             "optimizer": {},

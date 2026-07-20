@@ -1,4 +1,4 @@
-"""Lokal bg-remove servisi: uv run uvicorn serving.app:app --port 8756"""
+"""Local bg-remove service: uv run uvicorn serving.app:app --port 8756"""
 import io
 import threading
 from pathlib import Path
@@ -50,12 +50,12 @@ def remove(
     try:
         seg = _load_segmenter(model + ("+refine" if refine else ""))
     except KeyError:
-        raise HTTPException(400, f"bilinmeyen model: {model}")
+        raise HTTPException(400, f"unknown model: {model}")
     try:
         img = Image.open(io.BytesIO(file.file.read()))
         img.load()
     except Exception:
-        raise HTTPException(400, "geçersiz görsel dosyası")
+        raise HTTPException(400, "invalid image file")
     pipe = seg if isinstance(seg, PipelineSegmenter) else PipelineSegmenter(seg)
     out = pipe.process(img, decontaminate=decontaminate)
     buf = io.BytesIO()

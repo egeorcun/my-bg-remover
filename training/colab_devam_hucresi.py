@@ -1,24 +1,26 @@
-"""DEVAM HÜCRESİ — training/prepare_data_colab.ipynb'nin kalan tüm adımlarını
-(arka plan havuzu indirme, COD10K/HIM2K yapı keşfi + HIM2K birleştirme, tam
-manifest, kompozit üretimi, BiRefNet export, Drive'a kopyalama + bütünlük
-kontrolü) TEK bir hücrede baştan sona koşturur.
+"""RESUME CELL — runs all remaining steps of training/prepare_data_colab.ipynb
+(background pool download, COD10K/HIM2K structure discovery + HIM2K merge,
+full manifest, composite generation, BiRefNet export, copy to Drive +
+integrity check) end to end in a SINGLE cell.
 
-KULLANIM: Bu dosyanın TÜM içeriğini canlı Colab runtime'ında (repo zaten
-/content/my-bg-remover'da açılmış, Drive bağlı, `pip install -e .` yapılmış,
-data/raw_train/{dis5k,camo,p3m,trans460_train} + data/raw_train/{cod10k_raw,
-him2k_raw} zaten mevcut) yeni bir hücreye YAPIŞTIRIP çalıştırın. Argparse yok,
-`if __name__` bloğu yok — dosya import edilmeden doğrudan üst düzeyde koşar.
+USAGE: PASTE the ENTIRE contents of this file into a new cell in the live
+Colab runtime (repo already checked out at /content/my-bg-remover, Drive
+mounted, `pip install -e .` done, data/raw_train/{dis5k,camo,p3m,
+trans460_train} + data/raw_train/{cod10k_raw,him2k_raw} already present) and
+run it. No argparse, no `if __name__` block — the file runs directly at top
+level without being imported.
 
-Kernel'de önceki hücrelerden kalan değişkenlere GÜVENİLMEZ: bu dosya kendi
-başına, sıfırdan tüm durumu tanımlar (idempotent olduğu yerlerde — bkz. her
-aşamanın docstring'i).
+Variables left in the kernel by earlier cells are NOT TRUSTED: this file
+defines all of its state on its own, from scratch (idempotent where it is —
+see each stage's docstring).
 
-Durum takibi: her aşama başlangıcında/sonunda `report()` çağrılır; bu hem
-konsola yazar hem de Drive'a (`/content/drive/MyDrive/bg-remover-status/`)
-`log.txt` (append) ve `status.json` (üzerine yaz, `history` biriktirir) olarak
-kaydeder — dışarıdan (bu Colab oturumunun dışından) ilerlemeyi izlemek için.
-Beklenmeyen bir hata olursa `stage="FATAL"` ile tam traceback raporlanır ve
-hata TEKRAR FIRLATILIR (sessizce yutulmaz).
+Status tracking: `report()` is called at the start/end of every stage; it
+writes both to the console and to Drive
+(`/content/drive/MyDrive/bg-remover-status/`) as `log.txt` (append) and
+`status.json` (overwrite, accumulating `history`) — for monitoring progress
+from outside (from outside this Colab session). If an unexpected error
+occurs, the full traceback is reported with `stage="FATAL"` and the error is
+RE-RAISED (not swallowed silently).
 """
 
 import io
@@ -32,15 +34,15 @@ from pathlib import Path
 
 import PIL.Image
 
-# Transparent-460/HIM2K'da 100MP+ görseller var; kompozit çıktıları PIL'in
-# 179MP "decompression bomb" hata eşiğini aşabiliyor. Veri güvenilir akademik
-# setlerden geldiği için limit kaldırılıyor.
+# Transparent-460/HIM2K contain 100MP+ images; the composite outputs can
+# exceed PIL's 179MP "decompression bomb" error threshold. Since the data
+# comes from trusted academic datasets, the limit is removed.
 PIL.Image.MAX_IMAGE_PIXELS = None
 
 import numpy as np
 from PIL import Image
 
-# --- Sabitler -----------------------------------------------------------
+# --- Constants ------------------------------------------------------------
 WORKDIR = "/content/my-bg-remover"
 DRIVE_ROOT = "/content/drive/MyDrive"
 DRIVE_OUTPUT_SUBDIR = "bg-remover-data"
@@ -51,29 +53,30 @@ STATUS_DIR = Path(DRIVE_ROOT) / "bg-remover-status"
 LOG_PATH = STATUS_DIR / "log.txt"
 STATUS_PATH = STATUS_DIR / "status.json"
 
-# scripts/ bir paket değil (üstü __init__.py yok) — build_trainset/make_composites/
-# export_birefnet'i import edebilmek için mutlak yolu sys.path'e ekliyoruz (cwd henüz
-# değişmemiş olsa bile çalışsın diye mutlak yol kullanıyoruz, os.chdir'e bağımlı değil).
+# scripts/ is not a package (no __init__.py above it) — we add the absolute path
+# to sys.path so that build_trainset/make_composites/export_birefnet can be
+# imported (we use an absolute path so it works even if cwd has not changed yet,
+# independent of os.chdir).
 SCRIPTS_DIR = str(Path(WORKDIR) / "scripts")
 if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
 
-from benchmark.testset import append_entries  # noqa: E402  (pip install -e . ile kurulu paket)
+from benchmark.testset import append_entries  # noqa: E402  (package installed via pip install -e .)
 
 
 # ==========================================================================
-# Durum raporlama — controller bu dosyaları DIŞARIDAN izler, kritik.
+# Status reporting — the controller watches these files FROM OUTSIDE, critical.
 # ==========================================================================
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 def report(stage: str, status: str, **extra) -> None:
-    """log.txt'e satır ekler + status.json'u (history biriktirerek) yeniden yazar.
+    """Appends a line to log.txt + rewrites status.json (accumulating history).
 
-    Her çağrıda status.json'un mevcut `history`si okunur (varsa) ve yeni girdi
-    eklenir — böylece script kesintiye uğrayıp yeniden koşturulsa bile Drive'daki
-    geçmiş kaybolmaz."""
+    On every call, status.json's existing `history` is read (if present) and
+    the new entry appended — so even if the script is interrupted and re-run,
+    the history on Drive is not lost."""
     STATUS_DIR.mkdir(parents=True, exist_ok=True)
     ts = _now()
     line = f"[{ts}] stage={stage} status={status}"
@@ -96,7 +99,7 @@ def report(stage: str, status: str, **extra) -> None:
 
 
 # ==========================================================================
-# Stage 0 — ortam sağlık kontrolü
+# Stage 0 — environment sanity check
 # ==========================================================================
 RAW_DIR_CHECKS = {
     "dis5k": "data/raw_train/dis5k/im",
@@ -116,8 +119,9 @@ def _count_files(path: Path) -> int:
 
 
 def _setup_hf_env() -> None:
-    """HF indirme zaman aşımı (takılan indirme dersinden) + Colab Secrets'tan
-    HF_TOKEN (varsa) — bulunamazsa sessizce devam (çoğu kaynak anonim erişimle çalışır)."""
+    """HF download timeout (from the stuck-download lesson) + HF_TOKEN from
+    Colab Secrets (if present) — continues silently if not found (most sources
+    work with anonymous access)."""
     os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "30")
     try:
         from google.colab import userdata
@@ -125,9 +129,9 @@ def _setup_hf_env() -> None:
         token = userdata.get("HF_TOKEN")
         if token:
             os.environ["HF_TOKEN"] = token
-            print("HF_TOKEN Colab Secrets'tan alındı.")
+            print("HF_TOKEN obtained from Colab Secrets.")
     except Exception as e:
-        print(f"HF_TOKEN alınamadı (Secrets'ta yok veya erişim izni verilmedi): {e}")
+        print(f"Could not get HF_TOKEN (not in Secrets or access not granted): {e}")
 
 
 def stage0_env_sanity() -> dict:
@@ -137,14 +141,14 @@ def stage0_env_sanity() -> dict:
 
     counts = {name: _count_files(Path(rel)) for name, rel in RAW_DIR_CHECKS.items()}
     for name, c in counts.items():
-        print(f"{name}: {c} dosya")
+        print(f"{name}: {c} files")
 
     report("env", "done", cwd=str(Path.cwd()), counts=counts)
     return counts
 
 
 # ==========================================================================
-# Stage 1 — arka plan havuzu (BG-20k)
+# Stage 1 — background pool (BG-20k)
 # ==========================================================================
 def stage1_bg_pool() -> int:
     report("bg_pool", "running")
@@ -152,7 +156,7 @@ def stage1_bg_pool() -> int:
     bg_dir.mkdir(parents=True, exist_ok=True)
     existing = len(list(bg_dir.iterdir()))
     if existing >= BG_POOL_SIZE:
-        print(f"data/backgrounds zaten {existing} görsel içeriyor (>= {BG_POOL_SIZE}); indirme atlanıyor.")
+        print(f"data/backgrounds already contains {existing} images (>= {BG_POOL_SIZE}); skipping download.")
         report("bg_pool", "done", count=existing, skipped=True)
         return existing
 
@@ -167,7 +171,7 @@ def stage1_bg_pool() -> int:
     pattern = bg_spec["split_patterns"][0]  # "data/train-*-of-00022.parquet"
     parts = sorted(fs.glob(f"datasets/{bg_spec['hf_repo']}/{pattern}"))
 
-    written = existing  # KÜMÜLATİF sayaç — parça sınırlarında sıfırlanmaz (bkz. notebook cell (c) notu)
+    written = existing  # CUMULATIVE counter — not reset at part boundaries (see the note in notebook cell (c))
     for part in parts:
         if written >= BG_POOL_SIZE:
             break
@@ -186,24 +190,24 @@ def stage1_bg_pool() -> int:
             im.save(out_path, format="JPEG", quality=88)
             written += 1
 
-    print(f"data/backgrounds: {written} arka plan görseli.")
+    print(f"data/backgrounds: {written} background images.")
     report("bg_pool", "done", count=written)
     return written
 
 
 # ==========================================================================
-# Stage 2 — COD10K/HIM2K gerçek klasör yapısı keşfi
+# Stage 2 — discovery of the real COD10K/HIM2K folder structure
 # ==========================================================================
 def _walk_dirs(root: Path, max_depth: int = 4) -> list[dict]:
-    """root altındaki her dizin için (derinlik <= max_depth) jpg/png sayıları
-    ve stem kümelerini döndürür — img/gt dizin çiftlerini eşleştirmek için."""
+    """For every directory under root (depth <= max_depth), returns jpg/png
+    counts and stem sets — for pairing up img/gt directory pairs."""
     root = Path(root)
     out = []
     for dirpath, dirnames, filenames in os.walk(root):
         rel = Path(dirpath).relative_to(root)
         depth = 0 if str(rel) == "." else len(rel.parts)
         if depth >= max_depth:
-            dirnames[:] = []  # daha derine inme (ama bu dizinin kendisi işlenir)
+            dirnames[:] = []  # do not descend further (but this directory itself is processed)
         jpgs = [f for f in filenames if f.lower().endswith((".jpg", ".jpeg"))]
         pngs = [f for f in filenames if f.lower().endswith(".png")]
         out.append({
@@ -218,10 +222,11 @@ def _walk_dirs(root: Path, max_depth: int = 4) -> list[dict]:
 
 
 def discover_cod10k(raw_dir: Path) -> dict | None:
-    """COD10K-v3 zip'inin gerçek iç yapısını keşfeder: çok sayıda .jpg içeren bir
-    dizin ile aynı stem'lerin çoğunu paylaşan .png dizinini eşleştirir (stem
-    örtüşmesi = asıl doğruluk sinyali; isim tercihi (Image/GT/Train) yalnız
-    eşit derecede örtüşen adaylar arasında tie-break için kullanılır)."""
+    """Discovers the real internal structure of the COD10K-v3 zip: pairs a
+    directory containing many .jpg files with the .png directory that shares
+    most of the same stems (stem overlap = the real correctness signal; name
+    preference (Image/GT/Train) is used only as a tie-break among candidates
+    with equal overlap)."""
     if not raw_dir.exists():
         return None
     dirs = _walk_dirs(raw_dir, max_depth=4)
@@ -263,33 +268,34 @@ def stage2_discover_structure() -> dict | None:
     report("discover_cod10k", "running")
     raw_dir = Path("data/raw_train/cod10k_raw")
     if not raw_dir.exists():
-        print("data/raw_train/cod10k_raw yok — COD10K atlanıyor.")
-        report("discover_cod10k", "skipped", reason="dizin yok")
+        print("data/raw_train/cod10k_raw missing — skipping COD10K.")
+        report("discover_cod10k", "skipped", reason="directory missing")
         return None
 
     info = discover_cod10k(raw_dir)
     if info is None:
-        print("COD10K için örtüşen img/gt dizin çifti bulunamadı.")
-        report("discover_cod10k", "skipped", reason="eşleşme yok")
+        print("No overlapping img/gt directory pair found for COD10K.")
+        report("discover_cod10k", "skipped", reason="no match")
         return None
 
-    print(f"COD10K seçilen çift: img={info['img_dir']}  gt={info['gt_dir']}  "
-          f"örtüşen stem={info['overlap']}  belirsiz={info['ambiguous']}")
+    print(f"COD10K selected pair: img={info['img_dir']}  gt={info['gt_dir']}  "
+          f"overlapping stems={info['overlap']}  ambiguous={info['ambiguous']}")
     if info["ambiguous"]:
-        print(f"UYARI: birden çok aday eşit skorlu — en iyi tahmin seçildi. Adaylar: {info['candidates']}")
+        print(f"WARNING: multiple candidates scored equally — best guess selected. Candidates: {info['candidates']}")
     report("discover_cod10k", "done", img_dir=str(info["img_dir"]), gt_dir=str(info["gt_dir"]),
            overlap=info["overlap"], ambiguous=info["ambiguous"], candidates=info["candidates"])
     return info
 
 
 # ==========================================================================
-# Stage 3 — HIM2K instance-matting birleştirme
+# Stage 3 — HIM2K instance-matting merge
 # ==========================================================================
 def discover_him2k_dirs(raw_dir: Path) -> tuple[Path, Path] | None:
-    """images/train ve alphas/train dizinlerini bulur. Önce isimle (tam
-    'images/train' + 'alphas/train' yol örüntüsü) dener; bulamazsa sayaç
-    bazlı fallback (en çok .jpg içeren dizin = images; en çok alt-dizin
-    barındıran ayrı bir dizin = alphas, instance klasörleri varsayımıyla)."""
+    """Finds the images/train and alphas/train directories. First tries by
+    name (exact 'images/train' + 'alphas/train' path pattern); if not found,
+    falls back to count-based guessing (the directory with the most .jpg
+    files = images; a separate directory holding the most subdirectories =
+    alphas, assuming instance folders)."""
     if not raw_dir.exists():
         return None
 
@@ -304,7 +310,7 @@ def discover_him2k_dirs(raw_dir: Path) -> tuple[Path, Path] | None:
     if images_dir and alphas_dir:
         return images_dir, alphas_dir
 
-    # Fallback: isimle bulunamadı — sayaç bazlı en iyi tahmin.
+    # Fallback: not found by name — count-based best guess.
     dirs = _walk_dirs(raw_dir, max_depth=4)
     img_cands = [d for d in dirs if d["jpg_count"] >= 10]
     if not img_cands:
@@ -326,10 +332,11 @@ def discover_him2k_dirs(raw_dir: Path) -> tuple[Path, Path] | None:
 
 
 def merge_him2k(images_dir: Path, alphas_dir: Path, out_root: Path) -> int:
-    """Her görsel için alphas_dir/<stem>/ bir dizinse (instance PNG'leri) hepsini
-    piksel-bazında max ile birleştirir; alphas_dir/<stem>.{png,jpg} düz bir
-    dosyaysa doğrudan onu kullanır. Görseller kopyalanır (Drive taşımasında
-    symlink kırılma riski yok, bkz. scripts/build_trainset.py _link notu)."""
+    """For each image, if alphas_dir/<stem>/ is a directory (instance PNGs),
+    merges them all with a pixel-wise max; if alphas_dir/<stem>.{png,jpg} is a
+    flat file, uses it directly. Images are copied (no risk of broken
+    symlinks when moving to Drive, see the _link note in
+    scripts/build_trainset.py)."""
     out_im = out_root / "im"
     out_gt = out_root / "gt"
     out_im.mkdir(parents=True, exist_ok=True)
@@ -368,14 +375,14 @@ def stage3_merge_him2k() -> int:
     report("him2k_merge", "running")
     raw_dir = Path("data/raw_train/him2k_raw")
     if not raw_dir.exists():
-        print("data/raw_train/him2k_raw yok — HIM2K atlanıyor (general kategorisi opsiyonel).")
-        report("him2k_merge", "skipped", reason="dizin yok")
+        print("data/raw_train/him2k_raw missing — skipping HIM2K (the general category is optional).")
+        report("him2k_merge", "skipped", reason="directory missing")
         return 0
 
     dirs = discover_him2k_dirs(raw_dir)
     if dirs is None:
-        print("HIM2K images/alphas dizin çifti bulunamadı — atlanıyor.")
-        report("him2k_merge", "skipped", reason="images/alphas bulunamadı")
+        print("HIM2K images/alphas directory pair not found — skipping.")
+        report("him2k_merge", "skipped", reason="images/alphas not found")
         return 0
     images_dir, alphas_dir = dirs
     print(f"HIM2K: images_dir={images_dir}  alphas_dir={alphas_dir}")
@@ -384,24 +391,24 @@ def stage3_merge_him2k() -> int:
     existing_gt = len(list((out_root / "gt").iterdir())) if (out_root / "gt").exists() else 0
     existing_im = len(list((out_root / "im").iterdir())) if (out_root / "im").exists() else 0
     if existing_gt > 0 and existing_gt == existing_im:
-        print(f"data/raw_train/him2k_merged zaten {existing_gt} çift içeriyor; birleştirme atlanıyor (idempotent).")
+        print(f"data/raw_train/him2k_merged already contains {existing_gt} pairs; skipping merge (idempotent).")
         report("him2k_merge", "done", count=existing_gt, skipped=True)
         return existing_gt
 
     count = merge_him2k(images_dir, alphas_dir, out_root)
-    print(f"HIM2K birleştirildi: {count} çift -> {out_root}")
+    print(f"HIM2K merged: {count} pairs -> {out_root}")
     report("him2k_merge", "done", count=count)
     return count
 
 
 # ==========================================================================
-# Stage 4 — tam manifest (build_trainset.py mantığıyla, n=None + copy=True)
+# Stage 4 — full manifest (using build_trainset.py logic, n=None + copy=True)
 # ==========================================================================
 def stage4_build_manifest(cod10k_info: dict | None, him2k_count: int) -> dict:
     report("manifest", "running")
-    import build_trainset as bt  # scripts/ sys.path'te (dosya başında eklendi)
+    import build_trainset as bt  # scripts/ is on sys.path (added at the top of the file)
 
-    # Her koşuda temiz baştan — deterministik (spec madde 10).
+    # Clean start on every run — deterministic (spec item 10).
     if bt.MANIFEST.exists():
         bt.MANIFEST.unlink()
     for d in (bt.OUT_IMG, bt.OUT_GT):
@@ -412,22 +419,22 @@ def stage4_build_manifest(cod10k_info: dict | None, him2k_count: int) -> dict:
     counts: dict = {}
 
     def _run(name: str, img_glob: str, gt_glob: str, category: str, **kw) -> int:
-        # sample_source(n=None, ...) TÜM eşleşen çiftleri döndürür (kaynak koda
-        # göre doğrulandı: n is not None kontrolüyle sample sadece n verilince
-        # devreye girer) — huge-int hilesine gerek yok.
+        # sample_source(n=None, ...) returns ALL matching pairs (verified
+        # against the source code: with the `n is not None` check, sampling
+        # only kicks in when n is given) — no need for the huge-int trick.
         rows = bt.sample_source(name, img_glob, gt_glob, category, n=None, copy=True, **kw)
         append_entries(str(bt.MANIFEST), rows)
         counts[name] = len(rows)
-        print(f"{name} ({category}): {len(rows)} çift")
+        print(f"{name} ({category}): {len(rows)} pairs")
         return len(rows)
 
-    # camotr / p3m / trans460tr — SOURCE_SPECS TEK doğruluk kaynağından (disvd_tokens hariç).
+    # camotr / p3m / trans460tr — from the SINGLE source of truth SOURCE_SPECS (except disvd_tokens).
     for name, spec in bt.SOURCE_SPECS.items():
         if spec["category"] == "disvd_tokens":
             continue
         _run(name, spec["img_glob"], spec["gt_glob"], spec["category"])
 
-    # dis5ktr — kategori dosya adı token'ından atanır (thin/complex).
+    # dis5ktr — the category is assigned from the file-name token (thin/complex).
     rows = bt.sample_disvd_tokens("dis5ktr", bt.DIS5KTR_IMG_GLOB, bt.DIS5KTR_GT_GLOB, n=None, copy=True)
     append_entries(str(bt.MANIFEST), rows)
     dis_counts: dict = {}
@@ -435,11 +442,11 @@ def stage4_build_manifest(cod10k_info: dict | None, him2k_count: int) -> dict:
         dis_counts[r["category"]] = dis_counts.get(r["category"], 0) + 1
     counts["dis5ktr"] = dis_counts
     for category, c in sorted(dis_counts.items()):
-        print(f"dis5ktr ({category}): {c} çift")
+        print(f"dis5ktr ({category}): {c} pairs")
 
-    # cod10ktr — Stage 2'de keşfedilen gerçek img/gt dizinlerinden.
+    # cod10ktr — from the real img/gt directories discovered in Stage 2.
     if cod10k_info:
-        # Keşif göreli yol döndürebilir; köke göre çöz, sonra görelileştir.
+        # Discovery may return relative paths; resolve against the root, then relativize.
         root = Path(bt.ROOT).resolve()
 
         def _rel(p) -> str:
@@ -453,28 +460,28 @@ def stage4_build_manifest(cod10k_info: dict | None, him2k_count: int) -> dict:
         _run("cod10ktr", img_glob, gt_glob, "camouflage")
     else:
         counts["cod10ktr"] = 0
-        print("cod10ktr: atlandı (Stage 2'de dizin bulunamadı)")
+        print("cod10ktr: skipped (directory not found in Stage 2)")
 
-    # him2k — Stage 3'te birleştirilmiş him2k_merged/{im,gt}'den (general kategorisi, opsiyonel).
+    # him2k — from him2k_merged/{im,gt} merged in Stage 3 (general category, optional).
     if him2k_count > 0:
         _run("him2k", "data/raw_train/him2k_merged/im/*", "data/raw_train/him2k_merged/gt/*", "general")
     else:
         counts["him2k"] = 0
-        print("him2k: atlandı (Stage 3'te birleştirme yapılamadı)")
+        print("him2k: skipped (merge could not be done in Stage 3)")
 
     report("manifest", "done", counts=counts)
     return counts
 
 
 # ==========================================================================
-# Stage 5 — kompozit + augmentasyon üretimi (make_composites.run)
+# Stage 5 — composite + augmentation generation (make_composites.run)
 # ==========================================================================
 def stage5_make_composites() -> dict:
     report("composites", "running")
-    import make_composites as mc  # scripts/ sys.path'te
+    import make_composites as mc  # scripts/ is on sys.path
 
-    # per_image=1 + script varsayılan CATEGORY_MULTIPLIER (transparent x10,
-    # camouflage x2) — override YOK, drift önleme (spec: script defaults kullanılır).
+    # per_image=1 + the script's default CATEGORY_MULTIPLIER (transparent x10,
+    # camouflage x2) — NO override, drift prevention (spec: script defaults are used).
     counts = mc.run(
         manifest_path=Path("data/train/manifest.jsonl"),
         backgrounds_dir=Path("data/backgrounds"),
@@ -482,17 +489,17 @@ def stage5_make_composites() -> dict:
         seed=SEED,
         out_dir=Path("data/train_composites"),
     )
-    print("Kategori bazlı üretilen kompozit sayısı:", counts)
+    print("Composites generated per category:", counts)
     report("composites", "done", counts=counts)
     return counts
 
 
 # ==========================================================================
-# Stage 6 — BiRefNet formatına export
+# Stage 6 — export to BiRefNet format
 # ==========================================================================
 def stage6_export() -> dict:
     report("export", "running")
-    import export_birefnet as eb  # scripts/ sys.path'te
+    import export_birefnet as eb  # scripts/ is on sys.path
 
     stats = eb.export(
         manifest_path="data/train_composites/manifest.jsonl",
@@ -505,7 +512,7 @@ def stage6_export() -> dict:
 
 
 # ==========================================================================
-# Stage 7 — Drive'a kopyala + bütünlük kontrolü
+# Stage 7 — copy to Drive + integrity check
 # ==========================================================================
 def stage7_drive_copy(stats: dict) -> None:
     report("drive_copy", "running")
@@ -513,13 +520,13 @@ def stage7_drive_copy(stats: dict) -> None:
     dst = Path(DRIVE_ROOT) / DRIVE_OUTPUT_SUBDIR
     dst.mkdir(parents=True, exist_ok=True)
 
-    print(f"Kopyalanıyor: {src} -> {dst}")
+    print(f"Copying: {src} -> {dst}")
     shutil.copytree(src, dst, dirs_exist_ok=True)
 
     comp_manifest = Path("data/train_composites/manifest.jsonl")
     if comp_manifest.exists():
         shutil.copy2(comp_manifest, dst / "train_composites_manifest.jsonl")
-        print(f"Kompozit manifest de kopyalandı: {dst / 'train_composites_manifest.jsonl'}")
+        print(f"Composite manifest also copied: {dst / 'train_composites_manifest.jsonl'}")
 
     src_im = list((src / "TRAIN" / "im").iterdir())
     src_gt = list((src / "TRAIN" / "gt").iterdir())
@@ -529,20 +536,20 @@ def stage7_drive_copy(stats: dict) -> None:
     with open(src / "stats.json") as f:
         stats_on_disk = json.load(f)
 
-    print(f"im/: kaynak={len(src_im)}, hedef={len(dst_im)}")
-    print(f"gt/: kaynak={len(src_gt)}, hedef={len(dst_gt)}")
+    print(f"im/: source={len(src_im)}, destination={len(dst_im)}")
+    print(f"gt/: source={len(src_gt)}, destination={len(dst_gt)}")
     print(f"stats.json total: {stats_on_disk['total']}")
 
-    assert len(src_im) == len(dst_im), "im/ dosya sayısı Drive kopyasında eşleşmiyor!"
-    assert len(src_gt) == len(dst_gt), "gt/ dosya sayısı Drive kopyasında eşleşmiyor!"
-    assert len(dst_im) == len(dst_gt) == stats_on_disk["total"], "im/gt/stats.json toplam sayıları tutarsız!"
+    assert len(src_im) == len(dst_im), "im/ file count does not match in the Drive copy!"
+    assert len(src_gt) == len(dst_gt), "gt/ file count does not match in the Drive copy!"
+    assert len(dst_im) == len(dst_gt) == stats_on_disk["total"], "im/gt/stats.json totals are inconsistent!"
 
-    print("\nBÜTÜNLÜK KONTROLÜ BAŞARILI — veri Drive'da hazır.")
+    print("\nINTEGRITY CHECK PASSED — data is ready on Drive.")
     report("drive_copy", "done", im=len(dst_im), gt=len(dst_gt), total=stats_on_disk["total"])
 
 
 # ==========================================================================
-# Orkestrasyon — üst düzeyde koşar (hücre yapıştırılıp çalıştırıldığında).
+# Orchestration — runs at top level (when the cell is pasted and executed).
 # ==========================================================================
 def main() -> None:
     stage0_env_sanity()

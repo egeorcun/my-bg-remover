@@ -1,9 +1,10 @@
-"""Foreground/arka plan compositing ve augmentasyon.
+"""Foreground/background compositing and augmentation.
 
-Sözleşme: RGB `np.uint8 (H, W, 3)` [0, 255]; alpha `np.float32 (H, W)` [0, 1]
-(bkz. `bgr/segmenter.py`). Tüm rastgelelik çağırana ait `np.random.Generator`
-üzerinden akar — kütüphane içinde global seed (random.seed/np.random.seed)
-KULLANILMAZ, aynı seed'le her zaman aynı çıktı üretilir (determinism).
+Contract: RGB `np.uint8 (H, W, 3)` [0, 255]; alpha `np.float32 (H, W)` [0, 1]
+(see `bgr/segmenter.py`). All randomness flows through the caller-owned
+`np.random.Generator` — no global seeding (random.seed/np.random.seed) is
+EVER done inside the library, so the same seed always produces the same
+output (determinism).
 """
 import io
 
@@ -22,7 +23,7 @@ def _resize_rgb(rgb: np.ndarray, size: tuple[int, int]) -> np.ndarray:
 
 
 def _resize_alpha(alpha: np.ndarray, size: tuple[int, int]) -> np.ndarray:
-    """size = (w, h). PIL 'F' modu 32-bit float tek kanalı destekler."""
+    """size = (w, h). PIL's 'F' mode supports a single 32-bit float channel."""
     out = Image.fromarray(alpha.astype(np.float32), mode="F").resize(size, Image.BILINEAR)
     return np.asarray(out, dtype=np.float32).clip(0, 1)
 
@@ -34,11 +35,11 @@ def compose(
     rng: np.random.Generator,
     scale_range: tuple[float, float] = (0.4, 1.0),
 ) -> tuple[np.ndarray, np.ndarray]:
-    """fg'yi rastgele ölçek/konumla bg'ye alpha-blend eder.
+    """Alpha-blends fg onto bg at a random scale/position.
 
-    bg, fg'den küçükse (herhangi bir boyutta) önce büyütülür (canvas her zaman
-    fg'yi tam olarak içerecek kadar büyük olur). Döndürülen alpha, canvas
-    üzerinde yerleştirilen (ölçeklenmiş) fg alpha'sı dışında her yerde 0'dır.
+    If bg is smaller than fg (in either dimension) it is upscaled first (the
+    canvas is always large enough to fully contain fg). The returned alpha is
+    0 everywhere except where the placed (scaled) fg alpha lands on the canvas.
     """
     _check_shapes(fg_rgb, alpha)
     fh, fw = fg_rgb.shape[:2]
@@ -88,27 +89,27 @@ def augment(
     blur_prob: float = 0.3,
     flip_prob: float = 0.5,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Renk/parlaklık jitter, JPEG artifact, hafif blur, yatay flip uygular.
+    """Applies color/brightness jitter, JPEG artifacts, light blur, horizontal flip.
 
-    Alpha'ya YALNIZ geometrik dönüşüm (flip) uygulanır — renk jitter, blur ve
-    JPEG artifact yalnız RGB'yi etkiler.
+    Alpha receives ONLY the geometric transform (flip) — color jitter, blur
+    and JPEG artifacts affect RGB only.
     """
     _check_shapes(rgb, alpha)
     out_rgb = rgb
     out_alpha = alpha
 
-    # 1) renk/parlaklık jitter (yalnız RGB)
+    # 1) color/brightness jitter (RGB only)
     im = Image.fromarray(out_rgb, mode="RGB")
     im = ImageEnhance.Brightness(im).enhance(float(rng.uniform(0.8, 1.2)))
     im = ImageEnhance.Contrast(im).enhance(float(rng.uniform(0.8, 1.2)))
     im = ImageEnhance.Color(im).enhance(float(rng.uniform(0.7, 1.3)))
 
-    # 2) hafif blur (yalnız RGB)
+    # 2) light blur (RGB only)
     if rng.uniform() < blur_prob:
         radius = float(rng.uniform(0.3, 1.2))
         im = im.filter(ImageFilter.GaussianBlur(radius))
 
-    # 3) JPEG artifact: encode/decode döngüsü (yalnız RGB)
+    # 3) JPEG artifacts: encode/decode round-trip (RGB only)
     quality = int(rng.integers(jpeg_quality_range[0], jpeg_quality_range[1] + 1))
     buf = io.BytesIO()
     im.save(buf, format="JPEG", quality=quality)
@@ -116,7 +117,7 @@ def augment(
     im = Image.open(buf).convert("RGB")
     out_rgb = np.asarray(im, dtype=np.uint8)
 
-    # 4) yatay flip (RGB + alpha, tek geometrik dönüşüm)
+    # 4) horizontal flip (RGB + alpha, the only geometric transform)
     if rng.uniform() < flip_prob:
         out_rgb = out_rgb[:, ::-1, :]
         out_alpha = out_alpha[:, ::-1]

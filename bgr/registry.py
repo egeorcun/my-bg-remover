@@ -1,4 +1,4 @@
-"""İsimle segmenter üretimi. Yeni model eklemek = MODEL_SPECS'e satır eklemek."""
+"""Segmenter construction by name. Adding a new model = adding a row to MODEL_SPECS."""
 from bgr.segmenter import BiRefNetSegmenter, LocalBiRefNetSegmenter, Segmenter
 
 MODEL_SPECS: dict[str, dict] = {
@@ -44,9 +44,9 @@ MODEL_SPECS: dict[str, dict] = {
 }
 
 _GATED_HELP = (
-    "{model_id} gated bir model. Şunları yap:\n"
-    "1) https://huggingface.co/{model_id} adresinde lisansı onayla\n"
-    "2) `huggingface-cli login` ile giriş yap"
+    "{model_id} is a gated model. Do the following:\n"
+    "1) accept the license at https://huggingface.co/{model_id}\n"
+    "2) log in with `huggingface-cli login`"
 )
 
 
@@ -55,8 +55,8 @@ def get_segmenter(name: str) -> Segmenter:
 
     base_name, _, suffix = name.partition("+")
     if suffix and suffix != "refine":
-        raise KeyError(f"bilinmeyen varyant: +{suffix}")
-    spec = MODEL_SPECS[base_name]  # bilinmeyen ad -> KeyError
+        raise KeyError(f"unknown variant: +{suffix}")
+    spec = MODEL_SPECS[base_name]  # unknown name -> KeyError
     model_id = spec.get("model_id", spec.get("arch_id"))
     try:
         if spec.get("engine") == "inspyrenet":

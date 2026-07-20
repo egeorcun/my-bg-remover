@@ -24,7 +24,7 @@ def test_index_serves_html():
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/html")
     assert "Lucida" in r.text
-    assert "/remove" in r.text  # UI mevcut endpoint'e POST atıyor
+    assert "/remove" in r.text  # the UI POSTs to the existing endpoint
 
 
 def test_models_endpoint():
@@ -61,7 +61,7 @@ def test_unknown_model_400():
     buf = io.BytesIO()
     Image.new("RGB", (8, 8)).save(buf, format="PNG")
     buf.seek(0)
-    r = _client().post("/remove?model=yok", files={"file": ("x.png", buf, "image/png")})
+    r = _client().post("/remove?model=no-such-model", files={"file": ("x.png", buf, "image/png")})
     assert r.status_code == 400
 
 
@@ -69,6 +69,6 @@ def test_invalid_upload_400():
     with patch("serving.app._load_segmenter", return_value=FakeSeg()):
         r = _client().post(
             "/remove",
-            files={"file": ("garbage.png", io.BytesIO(b"bu bir gorsel degil"), "image/png")},
+            files={"file": ("garbage.png", io.BytesIO(b"this is not an image"), "image/png")},
         )
     assert r.status_code == 400

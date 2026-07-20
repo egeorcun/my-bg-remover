@@ -1,8 +1,8 @@
-"""Kenar renk sızması temizliği (color decontamination).
+"""Edge color-spill cleanup (color decontamination).
 
-Kenar pikselleri eski arka planla karışıktır; pymatting'in çok seviyeli
-foreground estimation'ı her piksel için saf özne rengini çözer. Alpha
-değişmez — yalnız RGB kanalları temizlenir.
+Edge pixels are mixed with the old background; pymatting's multi-level
+foreground estimation solves for the pure subject color at every pixel.
+Alpha is left untouched — only the RGB channels are cleaned.
 """
 import numpy as np
 from PIL import Image

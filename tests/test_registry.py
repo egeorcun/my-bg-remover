@@ -18,7 +18,7 @@ def test_lucida_spec_fields():
     spec = MODEL_SPECS["lucida"]
     assert spec["model_id"] == "egeorcun/lucida"
     assert spec["input_size"] == 1024
-    assert "ckpt" not in spec  # HF'den iner, lokal checkpoint gerektirmez
+    assert "ckpt" not in spec  # downloads from HF, needs no local checkpoint
 
 
 def test_bgr_v1_spec_fields():
@@ -57,11 +57,11 @@ def test_bgr_v1_unknown_variant_raises_before_model_load():
 
 def test_unknown_name_raises():
     with pytest.raises(KeyError):
-        get_segmenter("yok-boyle-model")
+        get_segmenter("no-such-model")
 
 
 def test_unknown_variant_raises_before_model_load():
-    """Bilinen taban ad + bilinmeyen varyant: model ağırlıkları yüklenmeden hızlıca KeyError."""
+    """Known base name + unknown variant: fast KeyError before any model weights load."""
     with pytest.raises(KeyError):
         get_segmenter("rmbg-2.0+refime")
 

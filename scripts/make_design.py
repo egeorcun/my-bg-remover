@@ -1,56 +1,64 @@
-"""v7 eğitimi için `design` kategorisi üreticisi — baskı-tasarımı / sticker /
-tişört grafiği tarzı sentetik örnekler (GitHub issue #2: halftone, mürekkep
-dokusu, dumanlı kenarlar ve beyaza eriyen ışımalı tasarımlarda model özneyi
-siliyor ya da hayaletleştiriyor; stil-domain açığı bu kategoriyle kapatılır).
+"""Generator for the v7 `design` category — synthetic print-design / sticker /
+t-shirt-graphic style samples (GitHub issue #2: on designs with halftone, ink
+texture, smoky edges and glows melting into white, the model erases or ghosts
+the subject; this category closes that style-domain gap).
 
-Her örnek bir "baskı tasarımı" kompozisyonudur:
+Each sample is a "print design" composition:
 
-- **Zemin**: kağıt-beyazı/krem düz renk (245-255 bandı) ya da hafif kağıt
-  dokusu (düşük genlikli gürültü); `PASTEL_BG_PROB` (%15) olasılıkla açık
-  pastel düz renk. Zemin GT'de alpha=0 — ayrıca kanvasın dış kenarında
-  `MARGIN_FRAC`'lik bir bant her elemanın alpha'sından SIFIRLANIR (baskı
-  "kenar boşluğu"; GT köşeleri her zaman 0 — test sözleşmesi).
-- **Stilize özne (1-2 adet)**: `fg_dirs` (trans460/HIM2K, im/+gt/ çiftleri) ve
-  `toonout_dir` havuzlarından alınan kesite BASKI-STİLİ filtre uygulanır —
-  KRİTİK: filtre YALNIZ RGB'ye dokunur, alpha AYNEN (bit-birebir) kalır
-  (`apply_print_filter`). Filtre menüsü: (a) halftone (luminance'ı nokta
-  ızgarasına çevirir — nokta yarıçapı KOYULUKLA ölçekli, klasik gazete tramı),
-  (b) posterize (3-5 seviye) + doygunluk artışı, (c) yüksek kontrast
-  "mürekkep" (eşikleme + kenar vurgusu), (d) filtresiz (%25). ToonOut
-  kaynakları zaten illüstrasyon — onlara çoğunlukla filtresiz/posterize düşer.
-- **Dumanlı kenar / airbrush** (`_smoke_alpha`): öznenin alpha'sının dışına
-  kıvrılan, `SMOKE_LO..SMOKE_HI` (0.1-0.5) bandında bulut/duman lekeleri
-  EKLENİR — GT'ye de AYNEN girer (duman tasarımın parçasıdır; Reddit Photo
-  1'in silinme nedeni tam bu doku). Organik görünüm iki oktavlı value-noise
-  ("Perlin benzeri") maskesiyle sağlanır.
-- **Işıma/patlama** (`RAY_PROB`=%50): öznenin ARKASINA radyal ışın demeti veya
-  glow — GT'de yarı saydam (`RAY_ALPHA_LO..RAY_ALPHA_HI` = 0.15-0.6).
-- **Display yazı (1-2 blok)**: make_textfx'in yazı makinesi YENİDEN KULLANILIR
-  (`_get_font`/`_draw_text_rgba`/`_rand_text` import edilir, kopyalanmaz). Ek
-  özellikler: KAVİSLİ yazı (harfler tek tek yay üzerine — `_curved_text_rgba`),
-  istifli çok satırlı blok (`_stacked_text_rgba`), eskitme/distress (yazı
-  alpha'sından value-noise grunge maskesiyle parça eksiltme — GT'ye de aynen).
-  Konum: üst ve/veya alt bant.
-- **Küçük dekorlar**: yıldız/şimşek/sıçrama lekeleri (2-6 adet, katı veya yarı
-  saydam) — basit vektör çizimler.
-- **GT = tüm elemanların alpha UNION'ı** (`1-(1-a)(1-b)` zinciri); zemin hiç
-  katılmaz.
+- **Background**: paper-white/cream flat color (245-255 band) or a light
+  paper texture (low-amplitude noise); with `PASTEL_BG_PROB` (15%)
+  probability a light pastel flat color. The background is alpha=0 in the
+  GT — additionally, a `MARGIN_FRAC`-wide band along the outer canvas edge
+  is ZEROED out of every element's alpha (the print "margin"; GT corners are
+  always 0 — a test contract).
+- **Stylized subject (1-2)**: a cutout taken from the `fg_dirs`
+  (trans460/HIM2K, im/+gt/ pairs) and `toonout_dir` pools gets a PRINT-STYLE
+  filter — CRITICAL: the filter touches ONLY the RGB, the alpha stays AS IS
+  (bit-identical) (`apply_print_filter`). Filter menu: (a) halftone (turns
+  luminance into a dot grid — dot radius scales with DARKNESS, the classic
+  newspaper screen), (b) posterize (3-5 levels) + saturation boost, (c)
+  high-contrast "ink" (thresholding + edge emphasis), (d) no filter (25%).
+  ToonOut sources are already illustrations — they mostly get
+  no-filter/posterize.
+- **Smoky edge / airbrush** (`_smoke_alpha`): cloud/smoke blotches curling
+  OUTWARD from the subject's alpha are ADDED in the `SMOKE_LO..SMOKE_HI`
+  (0.1-0.5) band — and enter the GT AS IS (the smoke is part of the design;
+  this texture is exactly why Reddit Photo 1 got erased). The organic look
+  comes from a two-octave value-noise ("Perlin-like") mask.
+- **Glow/burst** (`RAY_PROB`=50%): a radial ray burst or glow BEHIND the
+  subject — semi-transparent in the GT
+  (`RAY_ALPHA_LO..RAY_ALPHA_HI` = 0.15-0.6).
+- **Display text (1-2 blocks)**: make_textfx's text machinery is REUSED
+  (`_get_font`/`_draw_text_rgba`/`_rand_text` are imported, not copied).
+  Extras: CURVED text (letters placed one by one on an arc —
+  `_curved_text_rgba`), stacked multi-line blocks (`_stacked_text_rgba`),
+  distressing (chipping pieces out of the text alpha with a value-noise
+  grunge mask — reflected in the GT as is). Placement: top and/or bottom
+  band.
+- **Small decorations**: star/lightning-bolt/splatter marks (2-6, solid or
+  semi-transparent) — simple vector drawings.
+- **GT = the alpha UNION of all elements** (the `1-(1-a)(1-b)` chain); the
+  background never contributes.
 
-SÖZLEŞMELER (scripts/make_textfx.py ile BİREBİR AYNI):
-- Stem kalıbı `design_{i:05d}_c00`; çıktı `out_dir/im/{stem}.jpg` (JPEG q92) +
-  `out_dir/gt/{stem}.png` (L modu) — `_save_pair` make_textfx'ten import.
-- Manifest: `{"id": stem, "category": "design"}` satırları JSONL APPEND.
-- Determinizm: `_item_rng(seed, stem)` — aynı seed + aynı stem -> bit-identical
-  çıktı, işlem sırasından bağımsız (resume güvenliği). DİKKAT: kaynak havuzu
-  (fg_dirs içeriği / exclude_fg_stems) değişirse çıktı da değişir — havuz
-  seçim indeksleri havuz listesi üzerinden çözülür.
-- İdempotentlik: im+gt çifti diskte varsa üretim atlanır; dosya var ama
-  manifest satırı eksikse yalnız satır tamamlanır.
+CONTRACTS (EXACTLY THE SAME as scripts/make_textfx.py):
+- Stem pattern `design_{i:05d}_c00`; output `out_dir/im/{stem}.jpg` (JPEG
+  q92) + `out_dir/gt/{stem}.png` (mode L) — `_save_pair` imported from
+  make_textfx.
+- Manifest: `{"id": stem, "category": "design"}` lines APPENDED to JSONL.
+- Determinism: `_item_rng(seed, stem)` — same seed + same stem ->
+  bit-identical output, independent of processing order (resume safety).
+  CAUTION: if the source pool (fg_dirs contents / exclude_fg_stems) changes,
+  the output changes too — pool selection indices are resolved against the
+  pool list.
+- Idempotency: if the im+gt pair exists on disk, generation is skipped; if
+  the file exists but the manifest line is missing, only the line is
+  completed.
 
-`bg_dir` parametresi make_textfx.run() imza kalıbıyla uyum için kabul edilir
-ama KULLANILMAZ — zemin tamamen sentetiktir (kağıt/pastel).
+The `bg_dir` parameter is accepted for signature parity with
+make_textfx.run() but is NOT used — the background is fully synthetic
+(paper/pastel).
 
-Kullanım:
+Usage:
     uv run python scripts/make_design.py --out-dir data/train_design \
         --fg-dirs data/raw_train/trans460_pairs data/raw_train/him2k_merged \
         --toonout-dir /content/downloads/toonout --font-dir /content/fonts \
@@ -64,10 +72,11 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 
-# make_textfx ile AYNI dizinde (scripts/) — CLI'da script dizini, Colab/test
-# tarafında sys.path'e eklenen scripts/ üzerinden import edilir. Yazı/efekt
-# makinesi ve ortak sözleşme yardımcıları KOPYALANMAZ, import edilir.
-from make_textfx import (  # noqa: F401  (yeniden dışa açılan ortak yardımcılar)
+# In the SAME directory as make_textfx (scripts/) — imported via the script
+# directory on the CLI, and via the scripts/ entry added to sys.path on the
+# Colab/test side. The text/effect machinery and shared contract helpers are
+# NOT copied, they are imported.
+from make_textfx import (  # noqa: F401  (re-exported shared helpers)
     _append_manifest,
     _bright_color,
     _draw_text_rgba,
@@ -84,32 +93,32 @@ from make_textfx import (  # noqa: F401  (yeniden dışa açılan ortak yardımc
 )
 from make_textfx import _CHARS
 
-# Kaynak havuzlarında 100MP+ görsel olabilir (bkz. make_textfx aynı not).
+# Source pools may contain 100MP+ images (see the same note in make_textfx).
 Image.MAX_IMAGE_PIXELS = None
 
 DEFAULT_COUNT = 6000
 DEFAULT_CANVAS = (448, 768)
 
-MARGIN_FRAC = 0.02          # kanvas kenar bandı — GT'de her zaman 0 (köşe garantisi)
-PASTEL_BG_PROB = 0.15       # açık pastel düz zemin olasılığı
-PAPER_NOISE_PROB = 0.5      # kağıt-beyazı dalında hafif doku olasılığı
+MARGIN_FRAC = 0.02          # canvas edge band — always 0 in the GT (corner guarantee)
+PASTEL_BG_PROB = 0.15       # probability of a light pastel flat background
+PAPER_NOISE_PROB = 0.5      # probability of light texture on the paper-white branch
 
-FILTER_NONE_PROB = 0.25     # normal kaynakta filtresiz pay (menünün son dalı)
-SUBJECT_FRAC_LO, SUBJECT_FRAC_HI = 0.35, 0.7  # özne uzun kenarı / kanvas kısa kenarı
+FILTER_NONE_PROB = 0.25     # no-filter share for normal sources (last branch of the menu)
+SUBJECT_FRAC_LO, SUBJECT_FRAC_HI = 0.35, 0.7  # subject long side / canvas short side
 SECOND_SUBJECT_PROB = 0.35
-TOON_SUBJECT_PROB = 0.35    # iki havuz da doluysa öznenin ToonOut'tan gelme payı
+TOON_SUBJECT_PROB = 0.35    # share of subjects drawn from ToonOut when both pools are non-empty
 
-SMOKE_LO, SMOKE_HI = 0.1, 0.5      # duman alpha bandı (GT'ye aynen girer)
+SMOKE_LO, SMOKE_HI = 0.1, 0.5      # smoke alpha band (enters the GT as is)
 RAY_PROB = 0.5
 RAY_ALPHA_LO, RAY_ALPHA_HI = 0.15, 0.6
 
-CURVED_TEXT_PROB = 0.4      # kavisli yazı payı
-STACKED_TEXT_PROB = 0.35    # (kavisli seçilmediyse) istifli çok satırlı blok payı
-DISTRESS_PROB = 0.5         # eskitme/grunge maskesi olasılığı
-SECOND_TEXT_PROB = 0.5      # ikinci yazı bandı olasılığı
-DECOR_RANGE = (2, 6)        # dekor adedi (dahil-dahil)
+CURVED_TEXT_PROB = 0.4      # curved text share
+STACKED_TEXT_PROB = 0.35    # (if curved was not picked) stacked multi-line block share
+DISTRESS_PROB = 0.5         # probability of the distress/grunge mask
+SECOND_TEXT_PROB = 0.5      # probability of a second text band
+DECOR_RANGE = (2, 6)        # number of decorations (inclusive-inclusive)
 
-# Halftone/mürekkep "boya" paleti: klasik siyah + tek renk baskı mürekkepleri.
+# Halftone/ink "paint" palette: classic black + single-color print inks.
 _INK_COLORS: list[tuple[int, int, int]] = [
     (18, 18, 18), (120, 20, 30), (20, 40, 120), (26, 84, 46), (90, 30, 110),
 ]
@@ -117,11 +126,11 @@ _PAPER_RGB = (250, 249, 245)
 
 
 # ==========================================================================
-# Gürültü yardımcıları — duman ve grunge maskeleri için "Perlin benzeri"
-# (iki oktavlı value-noise; make_textfx'in gaussian araç kalıbından türedi).
+# Noise helpers — "Perlin-like" masks for smoke and grunge
+# (two-octave value-noise; derived from make_textfx's gaussian tooling pattern).
 # ==========================================================================
 def _value_noise(rng: np.random.Generator, h: int, w: int, cell_px: int) -> np.ndarray:
-    """Kaba rastgele ızgaranın bilinear büyütülmesi — [0,1] float32 (H, W)."""
+    """Bilinear upscaling of a coarse random grid — [0,1] float32 (H, W)."""
     gh = max(2, round(h / max(1, cell_px)))
     gw = max(2, round(w / max(1, cell_px)))
     grid = (rng.uniform(0.0, 1.0, (gh, gw)) * 255).astype(np.uint8)
@@ -130,7 +139,7 @@ def _value_noise(rng: np.random.Generator, h: int, w: int, cell_px: int) -> np.n
 
 
 def _perlin_noise(rng: np.random.Generator, h: int, w: int) -> np.ndarray:
-    """İki oktavlı value-noise, [0,1]'e normalize — bulut/duman/grunge dokusu."""
+    """Two-octave value-noise normalized to [0,1] — cloud/smoke/grunge texture."""
     n = 0.65 * _value_noise(rng, h, w, max(8, min(h, w) // 6)) + 0.35 * _value_noise(
         rng, h, w, max(3, min(h, w) // 18)
     )
@@ -140,31 +149,32 @@ def _perlin_noise(rng: np.random.Generator, h: int, w: int) -> np.ndarray:
 
 
 # ==========================================================================
-# Zemin — kağıt beyazı / krem / açık pastel (GT'de alpha=0)
+# Background — paper white / cream / light pastel (alpha=0 in the GT)
 # ==========================================================================
 def _design_bg(rng: np.random.Generator, size: tuple[int, int]) -> np.ndarray:
-    """Baskı zemini (H, W, 3 uint8): 245-255 bandı kağıt beyazı/krem (bazen
-    hafif dokulu) veya %15 olasılıkla açık pastel düz renk."""
+    """Print background (H, W, 3 uint8): 245-255-band paper white/cream
+    (sometimes lightly textured) or, with 15% probability, a light pastel
+    flat color."""
     w, h = size
     if rng.uniform() < PASTEL_BG_PROB:
-        col = (255 - rng.integers(12, 60, 3)).astype(np.float32)  # açık pastel
+        col = (255 - rng.integers(12, 60, 3)).astype(np.float32)  # light pastel
         arr = np.broadcast_to(col, (h, w, 3)).astype(np.float32).copy()
         return arr.round().clip(0, 255).astype(np.uint8)
 
     base = float(rng.integers(245, 256))
     col = np.array([base, base, base], dtype=np.float32)
-    if rng.uniform() < 0.5:  # krem tonu: mavi kanal hafif kısılır
+    if rng.uniform() < 0.5:  # cream tone: the blue channel is slightly reduced
         col[1] -= float(rng.uniform(0.0, 4.0))
         col[2] -= float(rng.uniform(2.0, 10.0))
     arr = np.broadcast_to(col, (h, w, 3)).astype(np.float32).copy()
-    if rng.uniform() < PAPER_NOISE_PROB:  # düşük genlikli kağıt dokusu
+    if rng.uniform() < PAPER_NOISE_PROB:  # low-amplitude paper texture
         amp = float(rng.uniform(1.5, 4.0))
         arr += amp * rng.standard_normal((h, w, 1)).astype(np.float32)
     return arr.round().clip(0, 255).astype(np.uint8)
 
 
 # ==========================================================================
-# Baskı-stili filtreler — YALNIZ RGB'ye; alpha AYNEN döner (bit-birebir)
+# Print-style filters — RGB ONLY; the alpha is returned AS IS (bit-identical)
 # ==========================================================================
 def _luminance(rgb: np.ndarray) -> np.ndarray:
     """(H, W, 3) uint8 -> [0,1] float32 luminance."""
@@ -173,8 +183,8 @@ def _luminance(rgb: np.ndarray) -> np.ndarray:
 
 
 def _filter_halftone(rgb: np.ndarray, rng: np.random.Generator) -> np.ndarray:
-    """Klasik gazete tramı: hücre bazlı ortalama luminance -> nokta yarıçapı
-    (koyu bölge = büyük mürekkep noktası). Tam vektörel — hücre döngüsü yok."""
+    """Classic newspaper screen: per-cell mean luminance -> dot radius
+    (dark region = large ink dot). Fully vectorized — no per-cell loop."""
     h, w = rgb.shape[:2]
     cell = int(rng.integers(4, 11))
     lum = _luminance(rgb)
@@ -195,7 +205,7 @@ def _filter_halftone(rgb: np.ndarray, rng: np.random.Generator) -> np.ndarray:
 
 
 def _filter_posterize(rgb: np.ndarray, rng: np.random.Generator) -> np.ndarray:
-    """Posterize (3-5 seviye) + doygunluk artışı."""
+    """Posterize (3-5 levels) + saturation boost."""
     levels = int(rng.integers(3, 6))
     step = 256.0 / levels
     q = (np.floor(rgb.astype(np.float32) / step) * (255.0 / (levels - 1))).clip(0, 255)
@@ -205,7 +215,7 @@ def _filter_posterize(rgb: np.ndarray, rng: np.random.Generator) -> np.ndarray:
 
 
 def _filter_ink(rgb: np.ndarray, rng: np.random.Generator) -> np.ndarray:
-    """Yüksek kontrast 'mürekkep': luminance eşiklemesi + hafif kenar vurgusu."""
+    """High-contrast 'ink': luminance thresholding + light edge emphasis."""
     lum = _luminance(rgb)
     thresh = float(rng.uniform(0.35, 0.6))
     gray8 = (lum * 255).astype(np.uint8)
@@ -221,9 +231,10 @@ def _filter_ink(rgb: np.ndarray, rng: np.random.Generator) -> np.ndarray:
 def apply_print_filter(
     rgb: np.ndarray, alpha: np.ndarray, rng: np.random.Generator, kind: str
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Baskı-stili filtreyi YALNIZ RGB'ye uygular; alpha AYNEN (aynı dizi,
-    bit-birebir) döner — kategori tasarımının kritik sözleşmesi: filtre stil
-    değiştirir, saydamlık ground-truth'u değiştirmez."""
+    """Applies the print-style filter to the RGB ONLY; the alpha is returned
+    AS IS (same array, bit-identical) — the critical contract of this
+    category's design: the filter changes the style, not the transparency
+    ground truth."""
     if kind == "halftone":
         return _filter_halftone(rgb, rng), alpha
     if kind == "posterize":
@@ -234,8 +245,8 @@ def apply_print_filter(
 
 
 def _pick_filter(rng: np.random.Generator, is_toon: bool) -> str:
-    """Filtre menüsü: normal kaynakta 4 dal eşit (%25 filtresiz); ToonOut zaten
-    illüstrasyon olduğundan çoğunlukla filtresiz/posterize."""
+    """Filter menu: 4 equal branches for normal sources (25% no filter);
+    ToonOut is already illustration, so it mostly gets no-filter/posterize."""
     u = float(rng.uniform())
     if is_toon:
         if u < 0.5:
@@ -251,15 +262,15 @@ def _pick_filter(rng: np.random.Generator, is_toon: bool) -> str:
 
 
 # ==========================================================================
-# Dumanlı kenar / airbrush — alpha'ya dışa kıvrılan yarı saydam duman lekeleri
+# Smoky edge / airbrush — semi-transparent smoke blotches curling outward from the alpha
 # ==========================================================================
 def _smoke_alpha(
     alpha: np.ndarray, rng: np.random.Generator, reach_frac: float | None = None
 ) -> np.ndarray:
-    """Nesne sınırından DIŞA kıvrılan duman/bulut lekeleri: [SMOKE_LO, SMOKE_HI]
-    bandında, nesnenin İÇİNDE (alpha > 0.05) her zaman 0. Zarf = alpha'nın
-    gaussian dışa bulanığı; doku = Perlin benzeri value-noise (lekeli kesim +
-    hafif blur ile organik kenar)."""
+    """Smoke/cloud blotches curling OUTWARD from the object boundary: in the
+    [SMOKE_LO, SMOKE_HI] band, always 0 INSIDE the object (alpha > 0.05).
+    Envelope = a gaussian outward blur of the alpha; texture = Perlin-like
+    value-noise (blotchy cutoff + light blur for an organic edge)."""
     h, w = alpha.shape
     if reach_frac is None:
         reach_frac = float(rng.uniform(0.05, 0.12))
@@ -273,24 +284,24 @@ def _smoke_alpha(
     envelope = np.clip(soft * float(rng.uniform(1.6, 2.4)), 0.0, 1.0)
     noise = _perlin_noise(rng, h, w)
     smoke = (SMOKE_LO + (SMOKE_HI - SMOKE_LO) * noise) * envelope
-    smoke = smoke * (noise > float(rng.uniform(0.25, 0.45)))  # lekeli/parçalı kesim
+    smoke = smoke * (noise > float(rng.uniform(0.25, 0.45)))  # blotchy/fragmented cutoff
     smoke = np.asarray(
         Image.fromarray((smoke * 255).astype(np.uint8), mode="L").filter(
             ImageFilter.GaussianBlur(1.0)
         ),
         dtype=np.float32,
     ) / 255.0
-    smoke[alpha > 0.05] = 0.0  # duman yalnız DIŞA — nesne içi GT'si değişmez
+    smoke[alpha > 0.05] = 0.0  # smoke only OUTWARD — the GT inside the object is unchanged
     return np.clip(smoke, 0.0, SMOKE_HI).astype(np.float32)
 
 
 # ==========================================================================
-# Stilize özne katmanı — kesit + baskı filtresi + duman (alpha'lar ayrı eleman)
+# Stylized subject layer — cutout + print filter + smoke (alphas as separate elements)
 # ==========================================================================
 def _resize_pair(
     rgb: np.ndarray, alpha: np.ndarray, size: tuple[int, int]
 ) -> tuple[np.ndarray, np.ndarray]:
-    """size = (w, h); RGB LANCZOS, alpha BILINEAR (make_composites kalıbı)."""
+    """size = (w, h); RGB LANCZOS, alpha BILINEAR (the make_composites pattern)."""
     rgb_r = np.asarray(
         Image.fromarray(rgb, mode="RGB").resize(size, Image.LANCZOS), dtype=np.uint8
     )
@@ -311,11 +322,12 @@ def _subject_layers(
     max_w: int,
     max_h: int,
 ) -> tuple[list[tuple[np.ndarray, np.ndarray]], tuple[int, int]] | None:
-    """Tek öznenin (duman + gövde) eleman listesi ve katman boyutu (lw, lh).
+    """Element list for a single subject (smoke + body) and the layer size (lw, lh).
 
-    Elemanlar: [(duman_rgb, duman_alpha), (özne_rgb, özne_alpha)] — duman önce
-    kompozit edilir, özne üstüne biner; GT union'ı ikisini de içerir. Boş
-    alpha'lı kaynakta None (özne atlanır)."""
+    Elements: [(smoke_rgb, smoke_alpha), (subject_rgb, subject_alpha)] — the
+    smoke is composited first, the subject sits on top; the GT union contains
+    both. Returns None for a source with an empty alpha (the subject is
+    skipped)."""
     im_path, gt_path = pair
     rgb = _load_rgb_capped(im_path)
     alpha = _load_alpha(gt_path, (rgb.shape[1], rgb.shape[0]))
@@ -326,10 +338,10 @@ def _subject_layers(
     y0, y1 = int(ys.min()), int(ys.max()) + 1
     rgb_c, a_c = rgb[y0:y1, x0:x1], alpha[y0:y1, x0:x1]
 
-    # Baskı-stili filtre — YALNIZ RGB'ye (apply_print_filter sözleşmesi).
+    # Print-style filter — RGB ONLY (the apply_print_filter contract).
     rgb_c, a_c = apply_print_filter(rgb_c, a_c, rng, _pick_filter(rng, is_toon))
 
-    # Ölçek: özne uzun kenarı kanvas kısa kenarının %35-70'i.
+    # Scale: the subject's long side is 35-70% of the canvas short side.
     target = canvas_min * float(rng.uniform(SUBJECT_FRAC_LO, SUBJECT_FRAC_HI))
     reach_frac = float(rng.uniform(0.05, 0.12))
     ch, cw = a_c.shape
@@ -353,7 +365,7 @@ def _subject_layers(
 
     layers = [(smoke_rgb, smoke), (subj_rgb, a_p)]
 
-    # Kanvasa sığmıyorsa katmanlar oransal küçültülür (duman dahil).
+    # If it does not fit the canvas, the layers are scaled down proportionally (smoke included).
     if lw > max_w or lh > max_h:
         f = min(max_w / lw, max_h / lh)
         nw, nh = max(1, int(lw * f)), max(1, int(lh * f))
@@ -366,26 +378,27 @@ def _subject_layers(
 
 
 # ==========================================================================
-# Işıma/patlama — öznenin arkasına radyal ışın demeti veya glow (yarı saydam)
+# Glow/burst — a radial ray burst or glow behind the subject (semi-transparent)
 # ==========================================================================
 def _ray_layer(
     rng: np.random.Generator, size: tuple[int, int], center: tuple[float, float]
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Kanvas boyutunda (rgb, alpha) eleman: radyal ışın demeti (sunburst) veya
-    gaussian glow. Alpha [RAY_ALPHA_LO, RAY_ALPHA_HI] bandında yarı saydam —
-    GT'ye aynen girer (kenar bandı kompozitte ayrıca sıfırlanır)."""
+    """Canvas-sized (rgb, alpha) element: a radial ray burst (sunburst) or a
+    gaussian glow. Alpha is semi-transparent in the [RAY_ALPHA_LO,
+    RAY_ALPHA_HI] band — it enters the GT as is (the edge band is zeroed
+    separately during compositing)."""
     w, h = size
     cx, cy = center
     val = float(rng.uniform(RAY_ALPHA_LO, RAY_ALPHA_HI))
     color = np.asarray(
         (255, 255, 255) if rng.uniform() < 0.4 else _bright_color(rng), dtype=np.float32
     )
-    if rng.uniform() < 0.5:  # glow: beyaza eriyen yumuşak ışıma
+    if rng.uniform() < 0.5:  # glow: soft radiance melting into white
         sigma = min(w, h) * float(rng.uniform(0.08, 0.18))
         yy = (np.arange(h, dtype=np.float32) - cy)[:, None]
         xx = (np.arange(w, dtype=np.float32) - cx)[None, :]
         a = (val * np.exp(-(xx**2 + yy**2) / (2 * sigma**2))).astype(np.float32)
-    else:  # sunburst: eşit aralıklı ışın kamaları
+    else:  # sunburst: evenly spaced ray wedges
         mask = Image.new("L", (w, h), 0)
         d = ImageDraw.Draw(mask)
         n = int(rng.integers(8, 17))
@@ -403,7 +416,7 @@ def _ray_layer(
 
 
 # ==========================================================================
-# Küçük dekorlar — yıldız / şimşek / sıçrama lekeleri (basit vektör çizimler)
+# Small decorations — star / lightning bolt / splatter marks (simple vector drawings)
 # ==========================================================================
 _BOLT_PTS = [(0.45, 0.0), (0.62, 0.0), (0.46, 0.42), (0.68, 0.42),
              (0.30, 1.0), (0.44, 0.55), (0.26, 0.55)]
@@ -412,7 +425,7 @@ _BOLT_PTS = [(0.45, 0.0), (0.62, 0.0), (0.46, 0.42), (0.68, 0.42),
 def _decor_layer(
     rng: np.random.Generator, size: tuple[int, int], margin: int
 ) -> tuple[np.ndarray, np.ndarray] | None:
-    """2-6 dekoru tek RGBA katmanına çizer; hiç dekor yoksa None."""
+    """Draws 2-6 decorations onto a single RGBA layer; None if there are none."""
     w, h = size
     n = int(rng.integers(DECOR_RANGE[0], DECOR_RANGE[1] + 1))
     if n <= 0:
@@ -425,12 +438,12 @@ def _decor_layer(
         lo_y, hi_y = margin + s, h - margin - s
         cx = float(rng.uniform(lo_x, hi_x)) if hi_x > lo_x else w / 2
         cy = float(rng.uniform(lo_y, hi_y)) if hi_y > lo_y else h / 2
-        a = int(float(rng.uniform(0.4, 1.0)) * 255)  # katı veya yarı saydam
+        a = int(float(rng.uniform(0.4, 1.0)) * 255)  # solid or semi-transparent
         col = _bright_color(rng) + (a,)
         kind = int(rng.integers(0, 3))
-        if kind == 0:  # yıldız
+        if kind == 0:  # star
             d.polygon(_star_points(cx, cy, s, s * 0.45, n=int(rng.integers(4, 7))), fill=col)
-        elif kind == 1:  # şimşek
+        elif kind == 1:  # lightning bolt
             ang = float(rng.uniform(-0.5, 0.5))
             ca, sa = math.cos(ang), math.sin(ang)
             pts = []
@@ -438,7 +451,7 @@ def _decor_layer(
                 dx, dy = (px - 0.45) * 2 * s, (py - 0.5) * 2 * s
                 pts.append((cx + dx * ca - dy * sa, cy + dx * sa + dy * ca))
             d.polygon(pts, fill=col)
-        else:  # sıçrama lekesi: merkez damla + uydu damlacıklar
+        else:  # splatter mark: central drop + satellite droplets
             r0 = s * 0.55
             d.ellipse([cx - r0, cy - r0, cx + r0, cy + r0], fill=col)
             for _ in range(int(rng.integers(3, 8))):
@@ -452,7 +465,7 @@ def _decor_layer(
 
 
 # ==========================================================================
-# Display yazı — make_textfx yazı makinesi + kavis / istif / eskitme
+# Display text — make_textfx text machinery + curve / stacking / distress
 # ==========================================================================
 def _word(rng: np.random.Generator, lo: int = 4, hi: int = 10) -> str:
     n = int(rng.integers(lo, hi))
@@ -467,9 +480,9 @@ def _curved_text_rgba(
     stroke_width: int = 0,
     stroke_fill: tuple[int, int, int] | None = None,
 ) -> Image.Image:
-    """KAVİSLİ display yazı: harfler tek tek, tepe noktası üstte olan bir yay
-    (arch) üzerine yerleştirilir ve yayın teğetine döndürülür. `theta` toplam
-    yay açısı (radyan). Deterministiktir (rng almaz) — testler doğrudan çağırır."""
+    """CURVED display text: letters are placed one by one on an arch (apex at
+    the top) and rotated to the arc's tangent. `theta` is the total arc angle
+    (radians). Deterministic (takes no rng) — tests call it directly."""
     text = text.strip() or "A"
     theta = max(0.15, min(float(theta), 2.4))
     pad = max(2, stroke_width + 2)
@@ -491,7 +504,7 @@ def _curved_text_rgba(
     chh = int(sag + 2 * gh_max)
     canvas = Image.new("RGBA", (cw, chh), (0, 0, 0, 0))
     cx = cw / 2.0
-    cy = gh_max * 0.5 + radius  # çember merkezi; yay tepesi y ~= gh_max*0.5
+    cy = gh_max * 0.5 + radius  # circle center; arc apex at y ~= gh_max*0.5
     cum = 0.0
     for img, wch in glyphs:
         phi = -theta / 2 + (cum + wch / 2) / radius
@@ -515,7 +528,7 @@ def _stacked_text_rgba(
     stroke_width: int,
     stroke_fill: tuple[int, int, int] | None,
 ) -> Image.Image:
-    """İstifli çok satırlı display blok: 2-3 satır, ortalanmış."""
+    """Stacked multi-line display block: 2-3 lines, centered."""
     pad = max(2, stroke_width + 2)
     lines = []
     for _ in range(int(rng.integers(2, 4))):
@@ -534,8 +547,8 @@ def _stacked_text_rgba(
 
 
 def _distress(img: Image.Image, rng: np.random.Generator) -> Image.Image:
-    """Eskitme: yazı alpha'sından value-noise grunge maskesiyle parça eksiltir
-    (GT'ye de aynen yansır — eksik parça tasarımın kendisidir)."""
+    """Distressing: chips pieces out of the text alpha with a value-noise
+    grunge mask (reflected in the GT as is — the missing piece IS the design)."""
     arr = np.array(img)
     noise = _perlin_noise(rng, arr.shape[0], arr.shape[1])
     keep = noise > float(rng.uniform(0.15, 0.35))
@@ -544,7 +557,7 @@ def _distress(img: Image.Image, rng: np.random.Generator) -> Image.Image:
 
 
 def _ink_or_bright(rng: np.random.Generator) -> tuple[int, int, int]:
-    """Baskı yazısı rengi: %50 koyu mürekkep, %50 parlak display rengi."""
+    """Print text color: 50% dark ink, 50% bright display color."""
     if rng.uniform() < 0.5:
         c = rng.integers(0, 70, 3)
         return (int(c[0]), int(c[1]), int(c[2]))
@@ -554,7 +567,7 @@ def _ink_or_bright(rng: np.random.Generator) -> tuple[int, int, int]:
 def _text_block(
     rng: np.random.Generator, canvas_size: tuple[int, int], font_paths: list[Path]
 ) -> Image.Image:
-    """Tek display yazı bloğu: kavisli / istifli / tek satır (+eskitme)."""
+    """A single display text block: curved / stacked / single line (+distress)."""
     cmin = min(canvas_size)
     font_size = max(10, int(cmin * float(rng.uniform(0.07, 0.16))))
     font = _get_font(font_paths, rng, font_size)
@@ -579,12 +592,12 @@ def _text_block(
 
 
 # ==========================================================================
-# Örnek kompozisyonu — GT = tüm elemanların alpha union'ı, zemin alpha=0
+# Sample composition — GT = the alpha union of all elements, background alpha=0
 # ==========================================================================
 def _paste_element(
     rgb_small: np.ndarray, a_small: np.ndarray, x0: int, y0: int, size: tuple[int, int]
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Küçük katmanı kanvas boyutunda (rgb float, alpha float) elemana gömer."""
+    """Embeds a small layer into a canvas-sized (rgb float, alpha float) element."""
     w, h = size
     sh, sw = a_small.shape
     rgb_full = np.zeros((h, w, 3), dtype=np.float32)
@@ -613,11 +626,12 @@ def _render_design_sample(
     toon_pairs: list[tuple[Path, Path]],
     font_paths: list[Path],
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Tek design örneği: (kompozit RGB uint8, alpha float32 [0,1]).
+    """A single design sample: (composite RGB uint8, alpha float32 [0,1]).
 
-    Eleman sırası (alta -> üste): ışıma -> özne(ler; duman + gövde) -> dekorlar
-    -> yazı blokları. GT tüm eleman alpha'larının union'ı; kanvasın MARGIN_FRAC
-    kenar bandı her elemanda sıfırlanır (zemin köşeleri GT'de daima 0)."""
+    Element order (bottom -> top): glow -> subject(s; smoke + body) ->
+    decorations -> text blocks. The GT is the union of all element alphas;
+    the canvas's MARGIN_FRAC edge band is zeroed in every element (background
+    corners are always 0 in the GT)."""
     w, h = size
     m = max(2, int(MARGIN_FRAC * min(w, h)))
     bg = _design_bg(rng, size)
@@ -626,7 +640,7 @@ def _render_design_sample(
     subject_elements: list[tuple[np.ndarray, np.ndarray]] = []
     centers: list[tuple[float, float]] = []
 
-    # 1) Stilize özne(ler) — 1-2 adet (havuz boşsa 0; ör. testlerde yalnız yazı).
+    # 1) Stylized subject(s) — 1-2 (0 if the pools are empty; e.g. text-only in tests).
     n_sub = (1 + (1 if rng.uniform() < SECOND_SUBJECT_PROB else 0)) if (fg_pairs or toon_pairs) else 0
     for _ in range(n_sub):
         if toon_pairs and fg_pairs:
@@ -645,17 +659,17 @@ def _render_design_sample(
             subject_elements.append(_paste_element(l_rgb, l_a, x0, y0, size))
         centers.append((x0 + lw / 2.0, y0 + lh / 2.0))
 
-    # 2) Işıma/patlama — öznenin ARKASINA (%50).
+    # 2) Glow/burst — BEHIND the subject (50%).
     if centers and rng.uniform() < RAY_PROB:
         elements.append(_ray_layer(rng, size, centers[0]))
     elements += subject_elements
 
-    # 3) Küçük dekorlar.
+    # 3) Small decorations.
     decor = _decor_layer(rng, size, m)
     if decor is not None:
         elements.append(decor)
 
-    # 4) Display yazı blokları — üst ve/veya alt bant.
+    # 4) Display text blocks — top and/or bottom band.
     n_text = 1 + (1 if rng.uniform() < SECOND_TEXT_PROB else 0)
     bands = ["top", "bottom"] if n_text == 2 else (["top"] if rng.uniform() < 0.5 else ["bottom"])
     for band in bands:
@@ -668,7 +682,7 @@ def _render_design_sample(
         y0 = m + jitter if band == "top" else max(m, h - m - th - jitter)
         elements.append(_rgba_to_element(img, x0, y0, size))
 
-    # Kompozit + GT union'ı (kenar bandı her elemanda sıfırlanır).
+    # Composite + GT union (the edge band is zeroed in every element).
     out_rgb = bg.astype(np.float32)
     total_a = np.zeros((h, w), dtype=np.float32)
     for el_rgb, el_a in elements:
@@ -683,7 +697,7 @@ def _render_design_sample(
 
 
 # ==========================================================================
-# Üretim döngüsü + orkestrasyon (make_textfx.gen_text / run kalıbı)
+# Generation loop + orchestration (the make_textfx.gen_text / run pattern)
 # ==========================================================================
 def gen_design(
     count: int,
@@ -696,7 +710,7 @@ def gen_design(
     existing_ids: set[str],
     canvas_range: tuple[int, int] = DEFAULT_CANVAS,
 ) -> tuple[list[dict], int, int]:
-    """(manifest satırları, üretilen çift sayısı, atlanan çift sayısı) döndürür."""
+    """Returns (manifest rows, number of pairs generated, number of pairs skipped)."""
     new_rows: list[dict] = []
     generated = skipped = 0
     lo, hi = canvas_range
@@ -708,7 +722,7 @@ def gen_design(
         if img_path.exists() and gt_path.exists():
             skipped += 1
             if stem not in existing_ids:
-                new_rows.append(row)  # dosya var, manifest satırı eksik -> yalnız satır
+                new_rows.append(row)  # file exists, manifest line missing -> line only
             continue
         rng = _item_rng(seed, stem)
         w = int(rng.integers(lo, hi + 1))
@@ -722,7 +736,7 @@ def gen_design(
 
 def run(
     out_dir: Path,
-    bg_dir: Path | None = None,  # imza uyumu (make_textfx kalıbı) — KULLANILMAZ
+    bg_dir: Path | None = None,  # signature parity (make_textfx pattern) — NOT used
     fg_dirs: list[Path] | None = None,
     toonout_dir: Path | None = None,
     font_dir: Path | None = None,
@@ -732,14 +746,14 @@ def run(
     canvas_range: tuple[int, int] = DEFAULT_CANVAS,
     exclude_fg_stems: set[str] | None = None,
 ) -> dict[str, int]:
-    """design üreticisini koşturur; {"design": yeni üretilen} döndürür (yalnız
-    >0 ise — make_textfx.run() kalıbı). `bg_dir` kullanılmaz (zemin sentetik).
+    """Runs the design generator; returns {"design": newly generated} (only if
+    >0 — the make_textfx.run() pattern). `bg_dir` is unused (synthetic background).
 
-    `exclude_fg_stems`: kaynak olarak KULLANILMAYACAK ham fg stem'leri (VAL
-    sızıntı koruması — çağıran val_stems.json'dan türetir; bkz.
-    training/v7_veri_guncelleme_hucresi.py). DİKKAT: havuz değişirse aynı
-    seed'in çıktıları da değişir — koruma kümesi koşular arasında sabit
-    tutulmalı (resume aynı kümeyle yapılmalı)."""
+    `exclude_fg_stems`: raw fg stems that must NOT be used as sources (VAL
+    leak guard — the caller derives it from val_stems.json; see
+    training/v7_veri_guncelleme_hucresi.py). CAUTION: if the pool changes,
+    the outputs of the same seed change too — the guard set must be kept
+    constant across runs (resume must use the same set)."""
     out_dir = Path(out_dir)
     out_im_dir = out_dir / "im"
     out_gt_dir = out_dir / "gt"
@@ -757,8 +771,8 @@ def run(
         toon_pairs = [p for p in toon_pairs if p[0].stem not in exclude_fg_stems]
     if count > 0 and not (fg_pairs or toon_pairs):
         raise SystemExit(
-            "design için kaynak im/gt çifti bulunamadı (--fg-dirs kökleri im/ + gt/ "
-            "içermeli ve/veya --toonout-dir verilmeli)"
+            "no source im/gt pairs found for design (--fg-dirs roots must contain "
+            "im/ + gt/ and/or --toonout-dir must be given)"
         )
     font_paths = _load_font_paths(Path(font_dir) if font_dir else None)
 
@@ -767,7 +781,7 @@ def run(
         existing_ids, canvas_range=canvas_range,
     )
 
-    # manifest'e yalnız yeni id'ler (run içi güvenlik dedup'u dahil — make_textfx kalıbı)
+    # only new ids go to the manifest (including an in-run safety dedup — make_textfx pattern)
     fresh: list[dict] = []
     seen = set(existing_ids)
     for row in rows:
@@ -777,7 +791,7 @@ def run(
     if fresh:
         _append_manifest(out_manifest, fresh)
 
-    print(f"{generated} yeni çift yazıldı, {skipped} zaten vardı (atlandı)")
+    print(f"{generated} new pairs written, {skipped} already existed (skipped)")
     return {"design": generated} if generated else {}
 
 
@@ -785,22 +799,22 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--out-dir", required=True, help="çıktı kökü (im/ + gt/ + manifest.jsonl)")
+    parser.add_argument("--out-dir", required=True, help="output root (im/ + gt/ + manifest.jsonl)")
     parser.add_argument("--bg-dir", default=None,
-                        help="imza uyumu için kabul edilir — KULLANILMAZ (zemin sentetik)")
+                        help="accepted for signature parity — NOT used (synthetic background)")
     parser.add_argument(
         "--fg-dirs", nargs="*", default=[],
-        help="özne kaynak kökleri; her kök im/ + gt/ alt dizinleri içermeli (stem eşleşmeli)",
+        help="subject source roots; each root must contain im/ + gt/ subdirectories (matched by stem)",
     )
-    parser.add_argument("--toonout-dir", default=None, help="ToonOut kökü (im/ + gt/)")
+    parser.add_argument("--toonout-dir", default=None, help="ToonOut root (im/ + gt/)")
     parser.add_argument("--font-dir", default=None,
-                        help=".ttf/.otf/.ttc font havuzu (yoksa PIL varsayılanı)")
+                        help=".ttf/.otf/.ttc font pool (PIL default if absent)")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--count", type=int, default=DEFAULT_COUNT)
-    parser.add_argument("--out-manifest", default=None, help="varsayılan: <out-dir>/manifest.jsonl")
+    parser.add_argument("--out-manifest", default=None, help="default: <out-dir>/manifest.jsonl")
     parser.add_argument(
         "--exclude-stems-file", default=None,
-        help="her satırda bir ham fg stem'i (VAL sızıntı koruması) — kaynak olarak kullanılmaz",
+        help="one raw fg stem per line (VAL leak guard) — not used as a source",
     )
     args = parser.parse_args()
     exclude = None

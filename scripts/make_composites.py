@@ -1,44 +1,49 @@
-"""`data/train/manifest.jsonl` + arka plan havuzundan compositing/augmentasyonlu
-eğitim kopyaları üretir (`bgr/compositing.py`: compose + augment).
+"""Generates composited/augmented training copies from `data/train/manifest.jsonl`
++ a background pool (`bgr/compositing.py`: compose + augment).
 
-Kategori bazlı per-image çarpanları (bkz. Faz 2 planı Task 4):
-- transparent: ×`per-image`×10 (compose + augment) — efektif karışımda ≥%20 pay için (bkz. docs/reports/2026-07-faz2-veri.md karışım hesabı; eski ×4 %7'de kalıyordu)
-  yüksek çarpan.
-- camouflage: ×`per-image`×2 ama **compose YOK**, yalnız augment — orijinal arka
-  plan korunur (compositing kamuflajı bozar: obje-arka plan doku/renk uyumu
-  kamuflajın özü, rastgele bir bg'ye yapıştırmak bu sinyali yok eder).
-- diğer tüm kategoriler (hair/complex/thin/general/product/illustration): ×`per-image`×1,
-  compose + augment.
+Per-category per-image multipliers (see the Phase 2 plan, Task 4):
+- transparent: ×`per-image`×10 (compose + augment) — a high multiplier so the
+  effective mix reaches a ≥20% share (see the mix calculation in
+  the project's internal phase report (removed from the repo); the old ×4 was stuck at 7%).
+- camouflage: ×`per-image`×2 but **NO compose**, augment only — the original
+  background is preserved (compositing destroys camouflage: object-background
+  texture/color harmony is the essence of camouflage, pasting onto a random
+  bg erases that signal).
+- all other categories (hair/complex/thin/general/product/illustration):
+  ×`per-image`×1, compose + augment.
 
-v3 (bkz. `.superpowers/sdd/v3-hazirlik-report.md`): gerçek-fotoğraf benchmark'ında
-over-deletion'ın kalıcı olma nedeni, kamuflaj DIŞINDAKİ tüm kategorilerin yalnız
-SENTETİK kompozit arka planlarda eğitilmesiydi (orijinal arka plan hiç görülmüyordu —
-domain gap). Bunu düzeltmek için `NO_COMPOSE_CATEGORIES` dışındaki her kategoriye
-ORİJİNAL arka planı koruyan (compose YOK, yalnız augment — camouflage'ın yolu ile
-BİREBİR aynı mekanizma) `ORIGINAL_BG_COPIES` (varsayılan 1) ek kopya eklenir; bu
-kopyalar `_v<NN>` yerine `_o<NN>` son ekiyle adlandırılır (mevcut `_v` çıktılarıyla
-ASLA çakışmaz — ayrı bir isim alanı, idempotent yeniden koşularda yalnız eksik
-`_o00`'lar üretilir). `run()`'un `exclude_source_ids` parametresi, VAL bölünmesinde
-zaten kullanılan (dolayısıyla eğitime SIZMAMASI gereken) kaynak satır id'lerini
-`_o00` üretiminden hariç tutar (VAL sızıntı koruması — bkz. `training/
-v3_veri_guncelleme_hucresi.py`, Drive'daki `val_stems.json`'dan türetilir).
-`only_original_bg=True` ise TÜM `_v<NN>` kopyaları (fiziksel compose çarpanları)
-tamamen atlanır, yalnız `_o00` seti üretilir — taze bir Colab VM'inde 28k'lik tüm
-kompozit setini yeniden üretmeden yalnız yeni ~14k `_o00` dosyasını hızlıca elde
-etmek için (bkz. aynı dosya, "composites_o" aşaması).
+v3 (see the internal review notes (not in the repo)): the reason over-deletion
+persisted on the real-photo benchmark was that all categories EXCEPT
+camouflage were trained only on SYNTHETIC composited backgrounds (the
+original background was never seen — a domain gap). To fix this, every
+category outside `NO_COMPOSE_CATEGORIES` gets `ORIGINAL_BG_COPIES`
+(default 1) extra copies that preserve the ORIGINAL background (NO compose,
+augment only — the EXACT same mechanism as camouflage's path); these copies
+are named with the `_o<NN>` suffix instead of `_v<NN>` (they NEVER collide
+with existing `_v` outputs — a separate namespace, and idempotent re-runs
+generate only the missing `_o00`s). `run()`'s `exclude_source_ids` parameter
+excludes source row ids already used in the VAL split (and which therefore
+must NOT leak into training) from `_o00` generation (VAL leak guard — see
+`training/v3_veri_guncelleme_hucresi.py`, derived from `val_stems.json` on
+Drive). With `only_original_bg=True`, ALL `_v<NN>` copies (the physical
+compose multipliers) are skipped entirely and only the `_o00` set is
+generated — to quickly obtain just the new ~14k `_o00` files on a fresh
+Colab VM without regenerating the whole 28k composite set (see the same
+file, the "composites_o" stage).
 
-Kullanım:
+Usage:
     uv run python scripts/make_composites.py --manifest data/train/manifest.jsonl \
         --backgrounds data/backgrounds --per-image 1 --seed 42 --out data/train_composites/
-    uv run python scripts/make_composites.py ... --limit 20   # duman/smoke koşusu
+    uv run python scripts/make_composites.py ... --limit 20   # smoke run
 
-Determinizm: her (kaynak satır id, kopya indeksi) çifti için `np.random.SeedSequence`
-ile BAĞIMSIZ bir alt-akış türetilir (global sıralı bir rng yerine) — böylece hem
-"aynı seed -> aynı çıktı" hem de kesintiye uğramış/kısmi bir koşunun (zaten üretilmiş
-id'ler atlanarak) güvenle sürdürülmesi aynı anda sağlanır: atlanan öğeler, henüz
-üretilmemiş öğelerin rastgele akışını etkilemez. `_o<NN>` id'leri de aynı `_item_rng`
-mekanizmasını kullanır (id string'i zaten `_v<NN>`'den farklı olduğundan bağımsız
-bir alt-akış alırlar).
+Determinism: for each (source row id, copy index) pair an INDEPENDENT
+sub-stream is derived via `np.random.SeedSequence` (instead of a global
+sequential rng) — this simultaneously guarantees both "same seed -> same
+output" and the safe resumption of an interrupted/partial run (skipping
+already-generated ids): skipped items do not affect the random streams of
+items not yet generated. `_o<NN>` ids use the same `_item_rng` mechanism
+(since the id string already differs from `_v<NN>`, they get an independent
+sub-stream).
 """
 import argparse
 import hashlib
@@ -54,9 +59,9 @@ CATEGORY_MULTIPLIER: dict[str, int] = {"transparent": 10, "camouflage": 2}
 DEFAULT_MULTIPLIER = 1
 NO_COMPOSE_CATEGORIES = {"camouflage"}
 ORIGINAL_BG_COPIES = 1
-"""`NO_COMPOSE_CATEGORIES` DIŞINDAKİ her kategoriye eklenen, orijinal arka planı
-koruyan (compose yok, yalnız augment) ekstra kopya sayısı — `_o<NN>` son ekiyle
-(bkz. modül docstring'i "v3" notu)."""
+"""Number of extra copies added to every category OUTSIDE `NO_COMPOSE_CATEGORIES`
+that preserve the original background (no compose, augment only) — with the
+`_o<NN>` suffix (see the "v3" note in the module docstring)."""
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
@@ -65,10 +70,10 @@ def multiplier(category: str) -> int:
 
 
 def _item_rng(seed: int, key: str) -> np.random.Generator:
-    """(global seed, öğe anahtarı) çiftinden bağımsız/deterministik rastgele akış.
+    """Independent/deterministic random stream from the (global seed, item key) pair.
 
-    İşlem sırasından ve önceden atlanmış (zaten var olan) öğelerden ETKİLENMEZ —
-    her öğe kendi id'sinden türetilen sabit bir alt-seed kullanır.
+    NOT affected by processing order or by previously skipped (already
+    existing) items — each item uses a fixed sub-seed derived from its own id.
     """
     digest = hashlib.sha256(key.encode("utf-8")).digest()
     entropy = [seed & 0xFFFFFFFF] + [
@@ -82,7 +87,7 @@ def _load_rgb(path: Path) -> np.ndarray:
 
 
 def _load_alpha(path: Path, target_size: tuple[int, int] | None = None) -> np.ndarray:
-    """target_size = (w, h); verilirse ve boyut uyuşmuyorsa alpha yeniden ölçeklenir."""
+    """target_size = (w, h); if given and the sizes do not match, the alpha is rescaled."""
     im = Image.open(path).convert("L")
     if target_size is not None and im.size != target_size:
         im = im.resize(target_size, Image.BILINEAR)
@@ -106,27 +111,29 @@ def run(
     exclude_source_ids: set[str] | None = None,
     only_original_bg: bool = False,
 ) -> dict[str, int]:
-    """`exclude_source_ids`: bu kümedeki KAYNAK satır id'leri (kompozit `_v`/`_o`
-    son eki EKLENMEDEN önceki `row['id']`) için `_o<NN>` (orijinal arka plan)
-    kopyası ÜRETİLMEZ — VAL sızıntı koruması (bkz. modül docstring'i). `_v<NN>`
-    kopyalarını ETKİLEMEZ (yalnız `_o<NN>` üretimini kısıtlar).
+    """`exclude_source_ids`: for SOURCE row ids in this set (the `row['id']`
+    BEFORE the composite `_v`/`_o` suffix is appended) no `_o<NN>` (original
+    background) copy is generated — VAL leak guard (see module docstring).
+    Does NOT affect `_v<NN>` copies (it only restricts `_o<NN>` generation).
 
-    `only_original_bg=True`: `_v<NN>` (fiziksel compose çarpanlı) kopyaların TAMAMI
-    atlanır, yalnız `_o<NN>` seti üretilir (bkz. modül docstring'i "v3" notu)."""
+    `only_original_bg=True`: ALL `_v<NN>` copies (the physical compose
+    multipliers) are skipped, only the `_o<NN>` set is generated (see the
+    "v3" note in the module docstring)."""
     manifest_path, backgrounds_dir, out_dir = Path(manifest_path), Path(backgrounds_dir), Path(out_dir)
     exclude_source_ids = exclude_source_ids or set()
 
-    # Kopya indeksi `{ci:02d}` ile 2 haneli formatlanır; ci >= 100'de 3 haneye
-    # taşar ve `training.train_colab_lib.strip_composite_copy_suffix`ün
-    # `_[vo]\d{2}$` deseni o id'lerle artık EŞLEŞMEZ — VAL sızıntı koruması
-    # onlar için sessizce baypas olurdu. Kopya sayısı kategori başına <= 99'a
-    # sıkı sınırlanır (pratikte en yüksek mevcut değer transparent x10).
+    # The copy index is formatted 2-digit via `{ci:02d}`; at ci >= 100 it
+    # overflows to 3 digits and the `_[vo]\d{2}$` pattern of
+    # `training.train_colab_lib.strip_composite_copy_suffix` would no longer
+    # MATCH those ids — the VAL leak guard would be silently bypassed for
+    # them. The copy count is strictly capped at <= 99 per category (in
+    # practice the highest existing value is transparent x10).
     max_copies = per_image * max([DEFAULT_MULTIPLIER, *CATEGORY_MULTIPLIER.values()])
     assert max_copies <= 99 and ORIGINAL_BG_COPIES <= 99, (
-        f"kopya sayısı kategori başına 99'u aşamaz (per_image={per_image} -> en çok "
-        f"{max_copies} _v kopyası; ORIGINAL_BG_COPIES={ORIGINAL_BG_COPIES}): 2 haneli "
-        f"`_v<NN>`/`_o<NN>` isimlendirmesi taşar ve VAL sızıntı korumasının son ek "
-        f"deseni (_[vo]\\d{{2}}$) kırılır."
+        f"copy count cannot exceed 99 per category (per_image={per_image} -> up to "
+        f"{max_copies} _v copies; ORIGINAL_BG_COPIES={ORIGINAL_BG_COPIES}): the 2-digit "
+        f"`_v<NN>`/`_o<NN>` naming would overflow and the VAL leak guard's suffix "
+        f"pattern (_[vo]\\d{{2}}$) would break."
     )
 
     out_img_dir = out_dir / "images"
@@ -142,7 +149,7 @@ def run(
 
     bg_paths = sorted(p for p in backgrounds_dir.iterdir() if p.suffix.lower() in IMG_EXTS)
     if not bg_paths:
-        raise SystemExit(f"arka plan bulunamadı: {backgrounds_dir}")
+        raise SystemExit(f"no backgrounds found: {backgrounds_dir}")
 
     existing_ids: set[str] = set()
     if out_manifest.exists():
@@ -197,7 +204,7 @@ def run(
 
     if new_entries:
         append_entries(str(out_manifest), new_entries)
-    print(f"{len(new_entries)} yeni kompozit yazıldı, {skipped} zaten vardı (atlandı)")
+    print(f"{len(new_entries)} new composites written, {skipped} already existed (skipped)")
     for category, count in sorted(counts.items()):
         print(f"{category}: {count}")
     return counts
@@ -210,16 +217,16 @@ def main() -> None:
     parser.add_argument("--per-image", type=int, default=1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--out", default="data/train_composites")
-    parser.add_argument("--limit", type=int, default=None, help="yalnız ilk N kaynak satırı (duman koşusu)")
+    parser.add_argument("--limit", type=int, default=None, help="only the first N source rows (smoke run)")
     parser.add_argument(
         "--exclude-ids-file",
         default=None,
-        help="her satırda bir kaynak id (VAL sızıntı koruması) — bu id'ler için _o<NN> üretilmez",
+        help="one source id per line (VAL leak guard) — no _o<NN> is generated for these ids",
     )
     parser.add_argument(
         "--only-original-bg",
         action="store_true",
-        help="_v<NN> (compose'lu) kopyaları tamamen atla, yalnız _o<NN> (orijinal arka plan) seti üret",
+        help="skip _v<NN> (composed) copies entirely, generate only the _o<NN> (original background) set",
     )
     args = parser.parse_args()
     exclude_source_ids = None

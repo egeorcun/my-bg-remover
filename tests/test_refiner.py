@@ -6,7 +6,7 @@ from bgr.refiner import refine_alpha
 
 
 class SharpFakeSeg:
-    """Kırpıntıda 'keskin' alpha döndürür: sol yarı 1, sağ yarı 0."""
+    """Returns a 'sharp' alpha for the crop: left half 1, right half 0."""
     name = "sharp-fake"
 
     def __init__(self):
@@ -30,9 +30,9 @@ def _blurry_alpha(h=128, w=128):
 def test_confident_alpha_untouched():
     seg = SharpFakeSeg()
     img = Image.new("RGB", (64, 64))
-    a = np.ones((64, 64), dtype=np.float32)  # tamamen emin
+    a = np.ones((64, 64), dtype=np.float32)  # fully confident
     out = refine_alpha(seg, img, a)
-    assert seg.calls == []  # hiç patch koşmadı
+    assert seg.calls == []  # no patch was run
     np.testing.assert_array_equal(out, a)
 
 
@@ -43,11 +43,11 @@ def test_uncertain_band_gets_sharper():
     out = refine_alpha(seg, img, blurry)
     assert len(seg.calls) >= 1
     band = (blurry > 0.05) & (blurry < 0.95)
-    # rafine sonrası bantta ara-değerli piksel sayısı azalmalı (keskinleşme)
+    # after refinement the count of mid-valued pixels in the band must drop (sharpening)
     mid_before = ((blurry > 0.2) & (blurry < 0.8) & band).sum()
     mid_after = ((out > 0.2) & (out < 0.8) & band).sum()
     assert mid_after < mid_before
-    # emin bölgeler değişmedi
+    # confident regions unchanged
     np.testing.assert_allclose(out[~band], blurry[~band], atol=1e-6)
 
 
@@ -61,6 +61,6 @@ def test_contract_preserved():
 
 def test_shape_mismatch_raises():
     seg = SharpFakeSeg()
-    img = Image.new("RGB", (96, 80))  # (w=96, h=80) -> alpha beklenen (80, 96)
+    img = Image.new("RGB", (96, 80))  # (w=96, h=80) -> expected alpha (80, 96)
     with pytest.raises(ValueError):
         refine_alpha(seg, img, np.ones((80, 80), dtype=np.float32))

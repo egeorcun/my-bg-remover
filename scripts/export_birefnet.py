@@ -1,28 +1,28 @@
-"""`data/train/manifest.jsonl` (veya kompozit manifest) formatındaki bir eğitim
-setini BiRefNet'in resmi eğitim koduna beklediği dizin düzenine export eder:
+"""Exports a training set in `data/train/manifest.jsonl` (or composite manifest)
+format to the directory layout BiRefNet's official training code expects:
 
-    OUT/SPLIT/im/<id>.jpg   (RGB, JPEG kalite 95)
-    OUT/SPLIT/gt/<id>.png   (L modu — tek kanallı gri tonlamalı alpha)
+    OUT/SPLIT/im/<id>.jpg   (RGB, JPEG quality 95)
+    OUT/SPLIT/gt/<id>.png   (L mode — single-channel grayscale alpha)
 
-Stem (`<id>`) her iki dizinde birebir eşleşir. Ayrıca `OUT/stats.json` yazılır:
-toplam çift sayısı, kategori dağılımı, kısa-kenar çözünürlük yüzdelikleri
-(p10/p50/p90) ve kategori bazında "soft-alpha" oranı (0.05 < a < 0.95 aralığındaki
-piksellerin payının, o kategorideki görsellerin ortalaması — matting/saydamlık
-setlerinde yumuşak geçişlerin ne kadar temsil edildiğini gösterir).
+The stem (`<id>`) matches exactly across both directories. `OUT/stats.json` is also
+written: total pair count, category distribution, short-side resolution percentiles
+(p10/p50/p90) and the per-category "soft-alpha" ratio (the share of pixels in the
+0.05 < a < 0.95 range, averaged over the images in that category — shows how well
+soft transitions are represented in matting/transparency sets).
 
-`gt_alpha=None` olan satırlar (GT'siz) export'a dahil edilmez — BiRefNet eğitimi
-GT gerektirir.
+Rows with `gt_alpha=None` (no GT) are not included in the export — BiRefNet
+training requires GT.
 
-İdempotentlik: `im/<id>.jpg` ve `gt/<id>.png` ikisi de zaten varsa yeniden
-YAZILMAZ (yalnız stats hesaplamasına disk üzerindeki mevcut dosyadan dahil edilir)
-— büyük setlerde kesintiye uğramış bir export'un güvenle sürdürülmesini sağlar.
+Idempotency: if both `im/<id>.jpg` and `gt/<id>.png` already exist, they are NOT
+REWRITTEN (they are only included in the stats computation from the existing file
+on disk) — this lets an interrupted export on large sets be resumed safely.
 
-Duplicate stem çakışması: manifest'te aynı `id` iki kez geçerse
-`benchmark.testset.load_manifest` (bu script'in üzerine kurulduğu ortak manifest
-altyapısı) "tekrarlanan id" ValueError'ı fırlatır — export bu hatayı olduğu gibi
-yükseltir (sessizce üzerine yazma YOKTUR).
+Duplicate stem collision: if the same `id` appears twice in the manifest,
+`benchmark.testset.load_manifest` (the shared manifest infrastructure this script
+is built on) raises a "duplicate id" ValueError — the export re-raises this error
+as-is (there is NO silent overwrite).
 
-Kullanım:
+Usage:
     uv run python scripts/export_birefnet.py --manifest data/train_composites/manifest.jsonl \
         --out data/birefnet_format --split-name TRAIN
 """
@@ -41,7 +41,7 @@ SOFT_ALPHA_HIGH = 0.95
 
 
 def _soft_alpha_ratio(alpha: np.ndarray) -> float:
-    """[0,1] normalize alpha dizisinde 0.05 < a < 0.95 olan piksellerin oranı."""
+    """Ratio of pixels with 0.05 < a < 0.95 in a [0,1]-normalized alpha array."""
     mask = (alpha > SOFT_ALPHA_LOW) & (alpha < SOFT_ALPHA_HIGH)
     return float(mask.mean())
 
@@ -61,8 +61,8 @@ def export(manifest_path: str | Path, out_dir: str | Path, split_name: str = "TR
     im_dir.mkdir(parents=True, exist_ok=True)
     gt_dir.mkdir(parents=True, exist_ok=True)
 
-    # load_manifest zaten tekrarlanan id'leri reddeder (bkz. modül docstring'i) —
-    # bu yüzden burada ayrıca bir "duplicate stem" kontrolüne gerek yok.
+    # load_manifest already rejects duplicate ids (see module docstring) —
+    # so no separate "duplicate stem" check is needed here.
     rows = [r for r in load_manifest(str(manifest_path)) if r.get("gt_alpha")]
 
     category_counts: dict[str, int] = {}
@@ -106,16 +106,16 @@ def export(manifest_path: str | Path, out_dir: str | Path, split_name: str = "TR
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--manifest", required=True, help="kaynak manifest.jsonl (testset formatı)")
-    parser.add_argument("--out", required=True, help="BiRefNet düzeninin yazılacağı kök dizin")
-    parser.add_argument("--split-name", default="TRAIN", help="alt dizin adı (varsayılan: TRAIN)")
+    parser.add_argument("--manifest", required=True, help="source manifest.jsonl (testset format)")
+    parser.add_argument("--out", required=True, help="root directory to write the BiRefNet layout to")
+    parser.add_argument("--split-name", default="TRAIN", help="subdirectory name (default: TRAIN)")
     args = parser.parse_args()
 
     stats = export(args.manifest, args.out, split_name=args.split_name)
-    print(f"{stats['total']} çift export edildi -> {Path(args.out) / args.split_name}")
+    print(f"{stats['total']} pairs exported -> {Path(args.out) / args.split_name}")
     for category, count in stats["category_counts"].items():
         print(f"  {category}: {count}")
-    print(f"stats.json yazıldı: {Path(args.out) / 'stats.json'}")
+    print(f"stats.json written: {Path(args.out) / 'stats.json'}")
 
 
 if __name__ == "__main__":

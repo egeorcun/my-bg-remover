@@ -12,7 +12,7 @@ def _solid(h, w, color) -> np.ndarray:
 
 @pytest.fixture
 def fg_alpha():
-    """32x32 kırmızı kare fg, merkezde 16x16 tam opak, kenarlarda yarı saydam halka."""
+    """32x32 red square fg, fully opaque 16x16 center, semi-transparent ring at the edges."""
     h = w = 32
     fg = _solid(h, w, (220, 30, 30))
     alpha = np.zeros((h, w), dtype=np.float32)
@@ -48,15 +48,15 @@ def test_compose_different_seed_differs(fg_alpha, bg):
 
 
 def test_compose_alpha_matches_placed_fg_when_no_scaling(fg_alpha, bg):
-    """scale sabit 1.0 ve bg==fg boyutunda iken x0=y0=0 zorunlu olur;
-    kompozit alpha tam olarak yerleştirilen (ölçeklenmemiş) fg alpha'sına eşit olmalı."""
+    """With scale fixed at 1.0 and bg the same size as fg, x0=y0=0 is forced;
+    the composite alpha must exactly equal the placed (unscaled) fg alpha."""
     fg, alpha = fg_alpha
     rng = np.random.default_rng(7)
     rgb, out_alpha = compose(fg, alpha, bg, rng, scale_range=(1.0, 1.0))
     assert np.array_equal(out_alpha, alpha)
-    # tam opak merkez pikselde rgb == fg rengi
+    # at the fully opaque center pixel rgb == fg color
     assert tuple(rgb[16, 16]) == (220, 30, 30)
-    # alpha=0 köşede rgb == bg rengi
+    # at the alpha=0 corner rgb == bg color
     assert tuple(rgb[0, 0]) == (10, 200, 10)
 
 
@@ -98,22 +98,23 @@ def _bbox(mask: np.ndarray) -> tuple[int, int, int, int]:
 
 
 def test_compose_alpha_and_rgb_colocated_under_random_placement():
-    """Gerçek rastgele yol (varsayılan scale_range, bg > fg): alpha>0 bounding box'ı,
-    çıktı rgb'de arka plan renginden sapan piksellerin bounding box'ıyla BİREBİR aynı
-    olmalı — yani RGB'nin yapıştırıldığı bölge ile alpha bölgesi aynı yere düşmeli."""
+    """Real random path (default scale_range, bg > fg): the alpha>0 bounding box
+    must be EXACTLY identical to the bounding box of pixels in the output rgb that
+    deviate from the background color — i.e. the region where RGB was pasted and
+    the alpha region must land in the same place."""
     fg = _solid(32, 32, (255, 0, 255))  # magenta fg
     alpha = np.zeros((32, 32), dtype=np.float32)
-    alpha[4:28, 2:26] = 1.0  # asimetrik iç dikdörtgen
+    alpha[4:28, 2:26] = 1.0  # asymmetric inner rectangle
     bg_color = (128, 128, 128)
     for seed in range(5):
-        bg = _solid(80, 96, bg_color)  # bg fg'den BÜYÜK, her turda taze kopya
+        bg = _solid(80, 96, bg_color)  # bg LARGER than fg, fresh copy each round
         rgb, out_alpha = compose(fg, alpha, bg, np.random.default_rng(seed))
         alpha_mask = out_alpha > 0
         rgb_diff_mask = np.any(rgb != np.array(bg_color, dtype=np.uint8), axis=-1)
-        assert alpha_mask.any(), f"seed={seed}: alpha tamamen boş"
-        assert rgb_diff_mask.any(), f"seed={seed}: rgb'de fg izi yok"
+        assert alpha_mask.any(), f"seed={seed}: alpha is completely empty"
+        assert rgb_diff_mask.any(), f"seed={seed}: no trace of fg in rgb"
         assert _bbox(alpha_mask) == _bbox(rgb_diff_mask), (
-            f"seed={seed}: alpha bölgesi {_bbox(alpha_mask)} != rgb yapıştırma bölgesi "
+            f"seed={seed}: alpha region {_bbox(alpha_mask)} != rgb paste region "
             f"{_bbox(rgb_diff_mask)}"
         )
 
@@ -128,7 +129,7 @@ def noisy_rgb_alpha():
     rng = np.random.default_rng(123)
     h = w = 40
     rgb = rng.integers(0, 256, size=(h, w, 3), dtype=np.uint8)
-    # sol-sağ ASİMETRİK desen: flip tespiti tam eşitlik karşılaştırmasıyla güvenilir olsun.
+    # left-right ASYMMETRIC pattern: makes flip detection reliable via exact-equality comparison.
     alpha = np.zeros((h, w), dtype=np.float32)
     alpha[10:30, 4:20] = 1.0
     alpha[5:10, 4:12] = 0.5
@@ -151,28 +152,29 @@ def test_augment_preserves_shape(noisy_rgb_alpha):
 
 
 def test_augment_alpha_only_ever_exactly_unchanged_or_flipped(noisy_rgb_alpha):
-    """Renk jitter/blur/JPEG alpha'ya HİÇ dokunmaz: alpha çıktısı ya orijinaliyle
-    ya da yatay flip'iyle birebir aynı olmalı (geometrik dışında hiçbir dönüşüm yok)."""
+    """Color jitter/blur/JPEG NEVER touch alpha: the alpha output must be exactly
+    identical to either the original or its horizontal flip (no transform other
+    than the geometric one)."""
     rgb, alpha = noisy_rgb_alpha
     flips_seen = {True: False, False: False}
     for seed in range(30):
         _, out_alpha = augment(rgb, alpha, np.random.default_rng(seed))
         is_flipped = np.array_equal(out_alpha, alpha[:, ::-1])
         is_unchanged = np.array_equal(out_alpha, alpha)
-        assert is_flipped or is_unchanged, f"seed={seed}: alpha renk/blur/jpeg'den etkilenmiş"
+        assert is_flipped or is_unchanged, f"seed={seed}: alpha was affected by color/blur/jpeg"
         flips_seen[is_flipped and not is_unchanged] = True
-    # olası her iki dal da (flip / no-flip) 30 denemede en az bir kez görülmeli
-    assert flips_seen[True], "30 seed'de hiç flip gözlenmedi (rng ~%50 olmalı)"
-    assert flips_seen[False], "30 seed'de hiç flip-olmayan gözlenmedi"
+    # both possible branches (flip / no-flip) must be seen at least once in 30 tries
+    assert flips_seen[True], "no flip observed across 30 seeds (rng should be ~50%)"
+    assert flips_seen[False], "no non-flip observed across 30 seeds"
 
 
 def test_augment_flip_applies_to_rgb_content_too():
-    """Flip olduğunda rgb de yatayda ters çevrilir: sol/sağ parlaklık sırası değişir."""
+    """When a flip happens, rgb is mirrored horizontally too: the left/right brightness order changes."""
     h, w = 40, 40
     rgb = np.zeros((h, w, 3), dtype=np.uint8)
-    rgb[:, : w // 2] = 230  # sol parlak
-    rgb[:, w // 2 :] = 20  # sağ karanlık
-    # asimetrik alpha: sabit (simetrik) desen flip tespitini imkansız kılar
+    rgb[:, : w // 2] = 230  # bright left
+    rgb[:, w // 2 :] = 20  # dark right
+    # asymmetric alpha: a constant (symmetric) pattern would make flip detection impossible
     alpha = np.zeros((h, w), dtype=np.float32)
     alpha[:, :5] = 1.0
 
@@ -180,28 +182,28 @@ def test_augment_flip_applies_to_rgb_content_too():
     for seed in range(30):
         out_rgb, out_alpha = augment(rgb, alpha, np.random.default_rng(seed))
         is_flipped = np.array_equal(out_alpha, alpha[:, ::-1])
-        # kenar etkilerinden kaçınmak için iç bölgelerin ortalamasını kullan
+        # use the means of interior regions to avoid edge effects
         left_mean = out_rgb[:, 5:15].mean()
         right_mean = out_rgb[:, -15:-5].mean()
         if is_flipped:
             found_flip = True
-            assert left_mean < right_mean, f"seed={seed}: flip sonrası sol/sağ parlaklık ters değil"
+            assert left_mean < right_mean, f"seed={seed}: left/right brightness not inverted after flip"
         else:
             found_no_flip = True
-            assert left_mean > right_mean, f"seed={seed}: flip olmadan sol/sağ parlaklık korunmamış"
+            assert left_mean > right_mean, f"seed={seed}: left/right brightness not preserved without flip"
     assert found_flip and found_no_flip
 
 
 def test_augment_jpeg_and_jitter_change_rgb_but_not_alpha(noisy_rgb_alpha):
     rgb, alpha = noisy_rgb_alpha
-    # no-flip seed'i bul
+    # find a no-flip seed
     seed = next(
         s
         for s in range(30)
         if np.array_equal(augment(rgb, alpha, np.random.default_rng(s))[1], alpha)
     )
     out_rgb, out_alpha = augment(rgb, alpha, np.random.default_rng(seed))
-    assert not np.array_equal(out_rgb, rgb), "jitter/blur/jpeg rgb'yi hiç değiştirmedi"
+    assert not np.array_equal(out_rgb, rgb), "jitter/blur/jpeg did not change rgb at all"
     assert np.array_equal(out_alpha, alpha)
 
 

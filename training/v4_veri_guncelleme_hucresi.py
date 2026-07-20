@@ -1,57 +1,65 @@
-"""V4 VERİ GÜNCELLEME HÜCRESİ — taze bir (ÜCRETSİZ, CPU yeterli — GPU GEREKMEZ)
-Colab oturumunda, mevcut Drive veri setine (`bg-remover-data/TRAIN`) yalnız YENİ
-v4 kategorilerinin (`text` = logo/yazı koruma, `fx` = obje etrafı VFX parıltı,
-`illustration` = ToonOut illüstrasyonları) çiftlerini ekler; v1/v2/v3'ün mevcut
-verisini YENİDEN ÜRETMEZ ve HİÇBİR mevcut dosyayı silmez/üzerine yazmaz.
+"""V4 DATA UPDATE CELL — in a fresh (FREE, CPU is enough — NO GPU NEEDED)
+Colab session, adds ONLY the pairs of the NEW v4 categories (`text` =
+logo/text preservation, `fx` = VFX glow around objects, `illustration` =
+ToonOut illustrations) to the existing Drive dataset (`bg-remover-data/
+TRAIN`); it does NOT REGENERATE the existing v1/v2/v3 data and does not
+delete/overwrite ANY existing file.
 
-KAYNAK / ATIF: bu dosyanın akış kalıbı (Drive mount → indirme bootstrap →
-üretim → TRAIN-only Drive merge → bütünlük kontrolü) ve `report`/`stage0_env_
-sanity`/`_download_bg_pool`/`_download_trans460`/`_gdown_extract`/`_ensure_
-gdown`/`discover_him2k_dirs`/`merge_him2k`/`_walk_dirs` fonksiyonları
-`training/v3_veri_guncelleme_hucresi.py`'den KOPYALANDI (o dosya paste-run
-tasarımı gereği import edilirken `main()` çalıştırdığından modül olarak import
-EDİLEMEZ — tek doğruluk kaynağı o dosyadır, drift görürseniz oradan güncelleyin).
-İndirme bootstrap'inden yalnız v4'ün GEREKTİRDİKLERİ alındı: BG-20k arka plan
-havuzu + fx için transparent (Transparent-460) ve general (HIM2K) foreground
-kaynakları — dis5k/camo/p3m/cod10k v4 üretiminde KULLANILMAZ, indirilmez.
+SOURCE / ATTRIBUTION: this file's flow pattern (Drive mount -> download
+bootstrap -> production -> TRAIN-only Drive merge -> integrity check) and the
+`report`/`stage0_env_sanity`/`_download_bg_pool`/`_download_trans460`/
+`_gdown_extract`/`_ensure_gdown`/`discover_him2k_dirs`/`merge_him2k`/
+`_walk_dirs` functions were COPIED from
+`training/v3_veri_guncelleme_hucresi.py` (that file CANNOT be imported as a
+module because, by paste-run design, it runs `main()` on import — it remains
+the single source of truth, update from there if you see drift). From the
+download bootstrap, only what v4 REQUIRES was taken: the BG-20k background
+pool + the transparent (Transparent-460) and general (HIM2K) foreground
+sources for fx — dis5k/camo/p3m/cod10k are NOT USED in v4 production and are
+not downloaded.
 
-V4'E ÖZGÜ YENİLER:
-1. **ToonOut** (HuggingFace `joelseytre/toonout`, im/gt/an alt klasörlü
-   train/val/test split yapısı): yalnız TRAIN split'i indirilir ve
-   `/content/downloads/toonout/{im,gt}` olarak normalize edilir. TEST split'ine
-   BİLEREK DOKUNULMAZ — o split ileride illustration benchmark'ı için ayrılacak
-   (buradan tek dosya bile eğitime sızarsa benchmark kirlenir).
-2. **Font bootstrap**: Google Fonts deposundan (github.com/google/fonts, OFL
-   lisanslı aileler) ~20 TTF `/content/fonts`'a indirilir; ağ/URL çürümesine
-   karşı her font tek tek try/except'li, hiçbiri inmezse sistem DejaVu
-   fontlarına düşülür (Colab VM'lerinde hazır bulunur).
-3. **Üretim `scripts/make_textfx.py` ile**: `run(out_dir, bg_dir, fg_dirs,
-   toonout_dir, font_dir, seed, counts)` çağrılır (counts: text=4000, fx=3500;
-   illustration sayısı ToonOut train boyutundan OTOMATİK). Bu script paralel
-   bir çalışmada yazılıyor — import/imza uyuşmazlığında bu hücre NET Türkçe
-   hata mesajıyla durur (aşağıdaki `stage_textfx` try/except'leri), sessizce
-   yarım veri üretmez.
-4. **Drive merge v3 kalıbıyla**: yalnız `TRAIN/` alt ağacı `shutil.copytree(...,
-   dirs_exist_ok=True)` ile MERGE edilir (silme/üzerine yazma yok; src kökündeki
-   KISMİ `stats.json` Drive'daki otoriter TAM stats.json'u ezmesin diye
-   KOPYALANMAZ — v3 reviewer bulgusu #1 fix'i burada da geçerli), kompozit
-   manifest'in Drive kopyasına (`train_composites_manifest.jsonl`) yalnız YENİ
-   id'ler APPEND edilir (`tcl.merge_composite_manifest`, dedupe'lu/idempotent).
-   VAL'e HİÇBİR yeni stem gitmez — yeni stemler her zaman TRAIN'e yazılır
-   (mevcut kural: `val_stems.json` bu hücrede OKUNMAZ bile, çünkü v4
-   kategorilerinin kaynakları mevcut VAL stemleriyle kesişmez — hepsi yepyeni
-   `text_`/`fx_`/ToonOut kaynaklı id'ler).
+NEW IN V4:
+1. **ToonOut** (HuggingFace `joelseytre/toonout`, a train/val/test split
+   structure with im/gt/an subfolders): only the TRAIN split is downloaded
+   and normalized as `/content/downloads/toonout/{im,gt}`. The TEST split is
+   DELIBERATELY LEFT UNTOUCHED — that split will be reserved for the future
+   illustration benchmark (if even a single file leaks from there into
+   training, the benchmark is contaminated).
+2. **Font bootstrap**: ~20 TTFs are downloaded to `/content/fonts` from the
+   Google Fonts repository (github.com/google/fonts, OFL-licensed families);
+   against network/URL rot, each font has its own try/except, and if none of
+   them download we fall back to the system DejaVu fonts (preinstalled on
+   Colab VMs).
+3. **Production via `scripts/make_textfx.py`**: `run(out_dir, bg_dir,
+   fg_dirs, toonout_dir, font_dir, seed, counts)` is called (counts:
+   text=4000, fx=3500; the illustration count is AUTOMATIC from the ToonOut
+   train size). That script is being written in a parallel effort — on an
+   import/signature mismatch this cell stops with a CLEAR error message (the
+   `stage_textfx` try/excepts below), it does not silently produce half a
+   dataset.
+4. **Drive merge with the v3 pattern**: only the `TRAIN/` subtree is MERGED
+   via `shutil.copytree(..., dirs_exist_ok=True)` (no deletion/overwriting;
+   the PARTIAL `stats.json` at the src root is NOT COPIED so it cannot
+   clobber the authoritative FULL stats.json on Drive — the v3 reviewer
+   finding #1 fix applies here too), and only the NEW ids are APPENDED to the
+   Drive copy of the composite manifest (`train_composites_manifest.jsonl`)
+   (`tcl.merge_composite_manifest`, deduped/idempotent). NO new stem goes to
+   VAL — new stems are always written to TRAIN (existing rule:
+   `val_stems.json` is not even READ in this cell, because the sources of the
+   v4 categories do not intersect the existing VAL stems — they are all
+   brand-new `text_`/`fx_`/ToonOut-sourced ids).
 
-ÖN KOŞULLAR: repo `/content/my-bg-remover`'da klonlanmış ve `pip install -e .`
-yapılmış olmalı; Drive'da `bg-remover-data/TRAIN/{im,gt}` (v1-v3 çıktısı) ZATEN
-mevcut olmalı. Repo GÜNCEL olmalı (env aşaması idempotent `git pull` dener):
-`scripts/make_textfx.py` ve `benchmark.testset.CATEGORIES`'in text/fx desteği
-bu hücreden AYRI bir çalışmada eklendi — eski bir klonla koşarsanız
-`stage_textfx` net bir mesajla durur.
+PREREQUISITES: the repo must be cloned at `/content/my-bg-remover` with `pip
+install -e .` done; `bg-remover-data/TRAIN/{im,gt}` (the v1-v3 output) must
+ALREADY exist on Drive. The repo must be UP TO DATE (the env stage attempts
+an idempotent `git pull`): `scripts/make_textfx.py` and the text/fx support
+in `benchmark.testset.CATEGORIES` were added in an effort SEPARATE from this
+cell — if you run with a stale clone, `stage_textfx` stops with a clear
+message.
 
-Durum takibi v3 hücresiyle AYNI mekanizma (`report()` ->
-`bg-remover-status/log.txt` + `status.json`) — aşamalar: env, downloads,
-fonts, textfx, export, drive_copy, (bitişte) ALL.
+Status tracking is the SAME mechanism as the v3 cell (`report()` ->
+`bg-remover-status/log.txt` + `status.json`) — stages: env, downloads,
+fonts, textfx, export, drive_copy, (at the end) ALL.
 """
 
 import io
@@ -68,14 +76,15 @@ from pathlib import Path
 
 import PIL.Image
 
-# Transparent-460/HIM2K'da 100MP+ görseller var; PIL'in 179MP "decompression
-# bomb" hata eşiğini aşabiliyor (bkz. v3_veri_guncelleme_hucresi.py aynı satır).
+# Transparent-460/HIM2K contain 100MP+ images; they can exceed PIL's 179MP
+# "decompression bomb" error threshold (see the same line in
+# v3_veri_guncelleme_hucresi.py).
 PIL.Image.MAX_IMAGE_PIXELS = None
 
-import numpy as np  # noqa: E402  (MAX_IMAGE_PIXELS PIL importundan/atamasından SONRA gelmeli)
+import numpy as np  # noqa: E402  (MAX_IMAGE_PIXELS must come AFTER the PIL import/assignment)
 from PIL import Image  # noqa: E402
 
-# --- Sabitler (v3_veri_guncelleme_hucresi.py ile AYNI) ---
+# --- Constants (SAME as v3_veri_guncelleme_hucresi.py) ---
 WORKDIR = "/content/my-bg-remover"
 DRIVE_ROOT = "/content/drive/MyDrive"
 DRIVE_OUTPUT_SUBDIR = "bg-remover-data"
@@ -83,31 +92,31 @@ DRIVE_STATUS_SUBDIR = "bg-remover-status"
 SEED = 42
 BG_POOL_SIZE = 5000
 
-# --- v4'e özgü sabitler ---
+# --- v4-specific constants ---
 TOONOUT_HF_REPO = "joelseytre/toonout"
-TOONOUT_DIR = Path("/content/downloads/toonout")  # normalize edilmiş im/ gt/ buraya
+TOONOUT_DIR = Path("/content/downloads/toonout")  # normalized im/ gt/ go here
 FONT_DIR = Path("/content/fonts")
-TEXTFX_OUT_DIR = Path("data/train_textfx")            # make_textfx.run() çıktısı (yerel, WORKDIR'e göre)
-EXPORT_DIR = "/content/birefnet_format_textfx"        # export_birefnet.export() çıktısı
-TEXTFX_COUNTS = {"text": 4000, "fx": 3500}            # illustration ToonOut boyutundan OTOMATİK
+TEXTFX_OUT_DIR = Path("data/train_textfx")            # make_textfx.run() output (local, relative to WORKDIR)
+EXPORT_DIR = "/content/birefnet_format_textfx"        # export_birefnet.export() output
+TEXTFX_COUNTS = {"text": 4000, "fx": 3500}            # illustration is AUTOMATIC from the ToonOut size
 V4_NEW_CATEGORIES = ("text", "fx", "illustration")
 
 STATUS_DIR = Path(DRIVE_ROOT) / DRIVE_STATUS_SUBDIR
 LOG_PATH = STATUS_DIR / "log.txt"
 STATUS_PATH = STATUS_DIR / "status.json"
 
-# scripts/ bir paket değil — make_textfx/export_birefnet'i import edebilmek
-# için mutlak yolu sys.path'e ekliyoruz (bkz. v3_veri_guncelleme_hucresi.py).
+# scripts/ is not a package — we add the absolute path to sys.path to be able
+# to import make_textfx/export_birefnet (see v3_veri_guncelleme_hucresi.py).
 SCRIPTS_DIR = str(Path(WORKDIR) / "scripts")
 if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
 
-from benchmark.testset import CATEGORIES, load_manifest  # noqa: E402  (pip install -e . ile kurulu paket)
-import training.train_colab_lib as tcl  # noqa: E402  (torch-free, test edilebilir mantık)
+from benchmark.testset import CATEGORIES, load_manifest  # noqa: E402  (package installed via pip install -e .)
+import training.train_colab_lib as tcl  # noqa: E402  (torch-free, testable logic)
 
 
 # ==========================================================================
-# Durum raporlama — `v3_veri_guncelleme_hucresi.py::report`'la BİREBİR AYNI.
+# Status reporting — EXACTLY IDENTICAL to `v3_veri_guncelleme_hucresi.py::report`.
 # ==========================================================================
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -136,10 +145,11 @@ def report(stage: str, status: str, **extra) -> None:
 
 
 # ==========================================================================
-# Stage "env" — Drive bağlama (HERŞEYDEN önce, STATUS_DIR Drive'da!) + repo
-# git pull (idempotent) + ortam sağlık kontrolü. Kaynak:
-# v3_veri_guncelleme_hucresi.py::stage0_env_sanity; git pull v4'e özgü ek —
-# make_textfx.py paralel çalışmada eklendiği için eski klon en sık hata kaynağı.
+# Stage "env" — Drive mount (BEFORE everything, STATUS_DIR lives on Drive!) +
+# repo git pull (idempotent) + environment sanity check. Source:
+# v3_veri_guncelleme_hucresi.py::stage0_env_sanity; git pull is a v4-specific
+# addition — since make_textfx.py was added in a parallel effort, a stale
+# clone is the most common source of errors.
 # ==========================================================================
 RAW_DIR_CHECKS = {
     "trans460_train": "data/raw_train/trans460_train/fg",
@@ -164,15 +174,16 @@ def _setup_hf_env() -> None:
         token = userdata.get("HF_TOKEN")
         if token:
             os.environ["HF_TOKEN"] = token
-            print("HF_TOKEN Colab Secrets'tan alındı.")
+            print("HF_TOKEN obtained from Colab Secrets.")
     except Exception as e:
-        print(f"HF_TOKEN alınamadı (Secrets'ta yok veya erişim izni verilmedi): {e}")
+        print(f"Could not obtain HF_TOKEN (not in Secrets or access not granted): {e}")
 
 
 def _git_pull_idempotent() -> None:
-    """Repo'yu günceller — `git pull --ff-only` zaten günceldeyse no-op
-    (idempotent); ağ yoksa/çakışma varsa UYARI verip devam eder (make_textfx
-    eksikse stage_textfx zaten net mesajla durduracak)."""
+    """Updates the repo — `git pull --ff-only` is a no-op if already up to
+    date (idempotent); if there is no network/there is a conflict, it prints a
+    WARNING and continues (if make_textfx is missing, stage_textfx will stop
+    with a clear message anyway)."""
     try:
         r = subprocess.run(
             ["git", "-C", WORKDIR, "pull", "--ff-only"],
@@ -180,19 +191,20 @@ def _git_pull_idempotent() -> None:
         )
         print(f"git pull: rc={r.returncode} {r.stdout.strip() or r.stderr.strip()}")
         if r.returncode != 0:
-            print("UYARI: git pull başarısız — repo eski kalmış olabilir; make_textfx.py "
-                  "eksikse aşağıda net hatayla durulacak.")
+            print("WARNING: git pull failed — the repo may be stale; if make_textfx.py "
+                  "is missing, we will stop below with a clear error.")
     except Exception as e:
-        print(f"UYARI: git pull çalıştırılamadı ({e}) — mevcut klonla devam ediliyor.")
+        print(f"WARNING: git pull could not be run ({e}) — continuing with the existing clone.")
 
 
 def stage0_env_sanity() -> dict:
-    # Drive HERŞEYDEN ÖNCE bağlanır (report() dahil — STATUS_DIR Drive'da!);
-    # drive.mount idempotenttir. Kaynak: v3 hücresi aynı aşama.
+    # Drive is mounted BEFORE EVERYTHING ELSE (including report() — STATUS_DIR
+    # lives on Drive!); drive.mount is idempotent. Source: the same stage in
+    # the v3 cell.
     from google.colab import drive
 
     drive.mount("/content/drive")
-    assert Path(DRIVE_ROOT).is_dir(), f"Drive bağlanamadı: {DRIVE_ROOT} yok"
+    assert Path(DRIVE_ROOT).is_dir(), f"Could not mount Drive: {DRIVE_ROOT} does not exist"
 
     report("env", "running")
     os.chdir(WORKDIR)
@@ -201,25 +213,26 @@ def stage0_env_sanity() -> dict:
 
     counts = {name: _count_files(Path(rel)) for name, rel in RAW_DIR_CHECKS.items()}
     for name, c in counts.items():
-        print(f"{name}: {c} dosya")
+        print(f"{name}: {c} files")
     for name in ("trans460_train", "him2k_raw", "backgrounds", "toonout", "fonts"):
         if counts[name] == 0:
-            print(f"NOT: {name} şu an boş — 'downloads'/'fonts' aşamasında indirilecek "
-                  f"(taze VM'de normal durum).")
+            print(f"NOTE: {name} is currently empty — it will be downloaded in the "
+                  f"'downloads'/'fonts' stage (normal on a fresh VM).")
 
     report("env", "done", cwd=str(Path.cwd()), counts=counts)
     return counts
 
 
 # ==========================================================================
-# Stage "downloads" — YALNIZ v4'ün gerektirdiği kaynaklar, İDEMPOTENT:
-#   - BG-20k arka plan havuzu (text/fx kompozitleri için) — kaynak:
-#     v3_veri_guncelleme_hucresi.py::_download_bg_pool (kopya).
-#   - Transparent-460 (fx için transparent foreground) — kaynak: aynı dosya
-#     _download_trans460 (kopya).
-#   - HIM2K (fx için general foreground; gdown + images/alphas birleştirme) —
-#     kaynak: aynı dosya _gdown_extract/discover_him2k_dirs/merge_him2k (kopya).
-#   - ToonOut (illustration) — v4'e ÖZGÜ, yalnız train split'i (test'e DOKUNMA).
+# Stage "downloads" — ONLY the sources v4 requires, IDEMPOTENT:
+#   - BG-20k background pool (for the text/fx composites) — source:
+#     v3_veri_guncelleme_hucresi.py::_download_bg_pool (copy).
+#   - Transparent-460 (transparent foreground for fx) — source: same file,
+#     _download_trans460 (copy).
+#   - HIM2K (general foreground for fx; gdown + images/alphas merge) —
+#     source: same file, _gdown_extract/discover_him2k_dirs/merge_him2k (copy).
+#   - ToonOut (illustration) — v4-SPECIFIC, only the train split (do NOT
+#     touch test).
 # ==========================================================================
 RAW = Path("data/raw_train")
 
@@ -230,9 +243,9 @@ def _load_source_defs() -> dict:
 
 
 def _download_bg_pool(source_defs: dict) -> int:
-    """Kaynak: v3_veri_guncelleme_hucresi.py::_download_bg_pool (kökeni
-    prepare_data_colab.ipynb hücre (e)/15) — BG-20k'dan BG_POOL_SIZE arka plan,
-    kümülatif sayaçla idempotent."""
+    """Source: v3_veri_guncelleme_hucresi.py::_download_bg_pool (originating
+    from prepare_data_colab.ipynb cell (e)/15) — BG_POOL_SIZE backgrounds from
+    BG-20k, idempotent via a cumulative counter."""
     import pyarrow.parquet as pq
     from huggingface_hub import HfFileSystem
 
@@ -240,7 +253,7 @@ def _download_bg_pool(source_defs: dict) -> int:
     bg_dir.mkdir(parents=True, exist_ok=True)
     existing = len(list(bg_dir.iterdir()))
     if existing >= BG_POOL_SIZE:
-        print(f"data/backgrounds zaten {existing} görsel içeriyor (>= {BG_POOL_SIZE}); indirme atlanıyor.")
+        print(f"data/backgrounds already contains {existing} images (>= {BG_POOL_SIZE}); skipping download.")
         return existing
 
     bg_spec = source_defs["bg_20k"]
@@ -248,7 +261,7 @@ def _download_bg_pool(source_defs: dict) -> int:
     pattern = bg_spec["split_patterns"][0]
     parts = sorted(fs.glob(f"datasets/{bg_spec['hf_repo']}/{pattern}"))
 
-    written = existing  # KÜMÜLATİF sayaç — parça sınırlarında sıfırlanmaz
+    written = existing  # CUMULATIVE counter — not reset at shard boundaries
     for part in parts:
         if written >= BG_POOL_SIZE:
             break
@@ -267,13 +280,13 @@ def _download_bg_pool(source_defs: dict) -> int:
             im.save(out_path, format="JPEG", quality=88)
             written += 1
 
-    print(f"data/backgrounds: {written} arka plan görseli.")
+    print(f"data/backgrounds: {written} background images.")
     return written
 
 
 def _download_trans460(source_defs: dict) -> int:
-    """Kaynak: v3_veri_guncelleme_hucresi.py::_download_trans460 (kopya) —
-    fx foreground kaynağı: fg/ + alpha/ (saydam objeler)."""
+    """Source: v3_veri_guncelleme_hucresi.py::_download_trans460 (copy) —
+    fx foreground source: fg/ + alpha/ (transparent objects)."""
     from huggingface_hub import snapshot_download
 
     spec = source_defs["transparent_460_train"]
@@ -281,7 +294,7 @@ def _download_trans460(source_defs: dict) -> int:
     existing = len(list((trans_out / "fg").iterdir())) if (trans_out / "fg").exists() else 0
     expected = spec.get("full_pair_count") or 0
     if expected and existing >= 0.9 * expected:
-        print(f"trans460_train: diskte zaten {existing} görsel (>= %90 x {expected}); indirme atlanıyor.")
+        print(f"trans460_train: already {existing} images on disk (>= 90% x {expected}); skipping download.")
         return existing
 
     trans_dir = snapshot_download(repo_id=spec["hf_repo"], repo_type="dataset", allow_patterns=["Train/*"])
@@ -290,12 +303,12 @@ def _download_trans460(source_defs: dict) -> int:
     shutil.copytree(Path(trans_dir) / "Train" / "fg", trans_out / "fg")
     shutil.copytree(Path(trans_dir) / "Train" / "alpha", trans_out / "alpha")
     total = len(list((trans_out / "fg").iterdir()))
-    print(f"transparent_460_train: {total} görsel -> {trans_out}")
+    print(f"transparent_460_train: {total} images -> {trans_out}")
     return total
 
 
 def _ensure_gdown() -> None:
-    """Kaynak: v3_veri_guncelleme_hucresi.py::_ensure_gdown (kopya)."""
+    """Source: v3_veri_guncelleme_hucresi.py::_ensure_gdown (copy)."""
     try:
         import gdown  # noqa: F401
     except ImportError:
@@ -303,10 +316,11 @@ def _ensure_gdown() -> None:
 
 
 def _gdown_extract(drive_id: str, out_dir: Path, label: str) -> bool:
-    """Kaynak: v3_veri_guncelleme_hucresi.py::_gdown_extract (kopya) —
-    başarısızlıkta False döner (pipeline'ı durdurmaz), out_dir doluysa atlar."""
+    """Source: v3_veri_guncelleme_hucresi.py::_gdown_extract (copy) — returns
+    False on failure (does not stop the pipeline), skips if out_dir is
+    populated."""
     if out_dir.exists() and any(out_dir.iterdir()):
-        print(f"{label}: {out_dir} zaten dolu; indirme atlanıyor.")
+        print(f"{label}: {out_dir} already populated; skipping download.")
         return True
     out_dir.mkdir(parents=True, exist_ok=True)
     zip_path = out_dir.parent / f"{out_dir.name}.zip"
@@ -318,15 +332,15 @@ def _gdown_extract(drive_id: str, out_dir: Path, label: str) -> bool:
 
         with zipfile.ZipFile(zip_path) as zf:
             zf.extractall(out_dir)
-        print(f"{label}: indirildi ve açıldı -> {out_dir}")
+        print(f"{label}: downloaded and extracted -> {out_dir}")
         return True
     except Exception as e:
-        print(f"UYARI: {label} indirilemedi ({e}) — bu kaynak ATLANACAK.")
+        print(f"WARNING: {label} could not be downloaded ({e}) — this source will be SKIPPED.")
         return False
 
 
 def _walk_dirs(root: Path, max_depth: int = 4) -> list[dict]:
-    """Kaynak: v3_veri_guncelleme_hucresi.py::_walk_dirs (kopya)."""
+    """Source: v3_veri_guncelleme_hucresi.py::_walk_dirs (copy)."""
     root = Path(root)
     out = []
     for dirpath, dirnames, filenames in os.walk(root):
@@ -348,7 +362,7 @@ def _walk_dirs(root: Path, max_depth: int = 4) -> list[dict]:
 
 
 def discover_him2k_dirs(raw_dir: Path) -> tuple[Path, Path] | None:
-    """Kaynak: v3_veri_guncelleme_hucresi.py::discover_him2k_dirs (kopya)."""
+    """Source: v3_veri_guncelleme_hucresi.py::discover_him2k_dirs (copy)."""
     if not raw_dir.exists():
         return None
 
@@ -384,8 +398,9 @@ def discover_him2k_dirs(raw_dir: Path) -> tuple[Path, Path] | None:
 
 
 def merge_him2k(images_dir: Path, alphas_dir: Path, out_root: Path) -> int:
-    """Kaynak: v3_veri_guncelleme_hucresi.py::merge_him2k (kopya) — instance
-    alfalarını max-birleştirip {im,gt} çiftleri üretir (fx general foreground)."""
+    """Source: v3_veri_guncelleme_hucresi.py::merge_him2k (copy) —
+    max-merges the instance alphas and produces {im,gt} pairs (fx general
+    foreground)."""
     out_im = out_root / "im"
     out_gt = out_root / "gt"
     out_im.mkdir(parents=True, exist_ok=True)
@@ -421,10 +436,11 @@ def merge_him2k(images_dir: Path, alphas_dir: Path, out_root: Path) -> int:
 
 
 def _ensure_him2k_merged(source_defs: dict) -> int:
-    """gdown ile HIM2K'yı indirip images/alphas'ı {im,gt} olarak birleştirir —
-    idempotent (merged zaten doluysa atlar). fx foreground'un GENERAL ayağı;
-    inmezse UYARI verilip yalnız trans460 ile devam edilir (make_textfx'e
-    yalnız var olan fg dizinleri geçilir)."""
+    """Downloads HIM2K via gdown and merges images/alphas into {im,gt} —
+    idempotent (skips if merged is already populated). The GENERAL leg of the
+    fx foreground; if it fails to download, a WARNING is printed and we
+    continue with trans460 only (only the existing fg directories are passed
+    to make_textfx)."""
     _ensure_gdown()
     ok = _gdown_extract(source_defs["him2k"]["drive_id"], RAW / "him2k_raw", "HIM2K")
     if not ok:
@@ -433,24 +449,26 @@ def _ensure_him2k_merged(source_defs: dict) -> int:
     existing_gt = len(list((out_root / "gt").iterdir())) if (out_root / "gt").exists() else 0
     existing_im = len(list((out_root / "im").iterdir())) if (out_root / "im").exists() else 0
     if existing_gt > 0 and existing_gt == existing_im:
-        print(f"{out_root} zaten {existing_gt} çift içeriyor; birleştirme atlanıyor.")
+        print(f"{out_root} already contains {existing_gt} pairs; skipping merge.")
         return existing_gt
     dirs = discover_him2k_dirs(RAW / "him2k_raw")
     if dirs is None:
-        print("HIM2K images/alphas dizin çifti bulunamadı — general foreground ATLANACAK.")
+        print("HIM2K images/alphas directory pair not found — general foreground will be SKIPPED.")
         return 0
     n = merge_him2k(dirs[0], dirs[1], out_root)
-    print(f"HIM2K birleştirildi: {n} çift -> {out_root}")
+    print(f"HIM2K merged: {n} pairs -> {out_root}")
     return n
 
 
 def _download_toonout() -> int:
-    """v4'e ÖZGÜ: HuggingFace `joelseytre/toonout` deposunun YALNIZ train
-    split'ini indirir (allow_patterns=["train/*"] — test split'i BİLEREK hiç
-    indirilmez, o illustration benchmark'ı için ayrılacak; val de gereksiz) ve
-    `/content/downloads/toonout/{im,gt}` olarak normalize eder (im/gt/an alt
-    klasör yapısından an/ kullanılmaz — make_textfx yalnız im+gt bekler).
-    İdempotent: hedef im/ zaten doluysa ve im/gt sayıları eşitse atlar."""
+    """v4-SPECIFIC: downloads ONLY the train split of the HuggingFace
+    `joelseytre/toonout` repo (allow_patterns=["train/*"] — the test split is
+    DELIBERATELY never downloaded, it will be reserved for the illustration
+    benchmark; val is unnecessary too) and normalizes it as
+    `/content/downloads/toonout/{im,gt}` (from the im/gt/an subfolder
+    structure, an/ is not used — make_textfx expects only im+gt).
+    Idempotent: skips if the target im/ is already populated and the im/gt
+    counts are equal."""
     from huggingface_hub import snapshot_download
 
     out_im = TOONOUT_DIR / "im"
@@ -458,20 +476,21 @@ def _download_toonout() -> int:
     existing_im = len(list(out_im.iterdir())) if out_im.exists() else 0
     existing_gt = len(list(out_gt.iterdir())) if out_gt.exists() else 0
     if existing_im > 0 and existing_im == existing_gt:
-        print(f"toonout: {TOONOUT_DIR} zaten {existing_im} çift içeriyor; indirme atlanıyor.")
+        print(f"toonout: {TOONOUT_DIR} already contains {existing_im} pairs; skipping download.")
         return existing_im
 
-    # Depo yapısı (2026-07 itibarıyla doğrulandı): split'ler klasör DEĞİL,
-    # `data/{train,validation,test}_generations_*.tar` arşivleri. Her tar'ın
-    # içinde `<generation_adı>/{im,gt,an}` var. Yalnız train tar'ları indirilir.
+    # Repo structure (verified as of 2026-07): the splits are NOT folders but
+    # `data/{train,validation,test}_generations_*.tar` archives. Each tar
+    # contains `<generation_name>/{im,gt,an}`. Only the train tars are
+    # downloaded.
     import tarfile
 
     snap = Path(snapshot_download(repo_id=TOONOUT_HF_REPO, repo_type="dataset",
                                   allow_patterns=["data/train_*.tar"]))
     tars = sorted((snap / "data").glob("train_*.tar"))
     assert tars, (
-        f"ToonOut snapshot'ında data/train_*.tar bulunamadı: {snap} — repo yapısı "
-        f"değişmiş olabilir (beklenen: data/train_generations_*.tar arşivleri)."
+        f"No data/train_*.tar found in the ToonOut snapshot: {snap} — the repo structure "
+        f"may have changed (expected: data/train_generations_*.tar archives)."
     )
     extract_root = TOONOUT_DIR / "_extract"
     extract_root.mkdir(parents=True, exist_ok=True)
@@ -486,15 +505,15 @@ def _download_toonout() -> int:
         src_im, src_gt = gen_dir / "im", gen_dir / "gt"
         if not (src_im.is_dir() and src_gt.is_dir()):
             continue
-        # macOS AppleDouble artıkları (`._*`) görüntü değildir — filtrele.
+        # macOS AppleDouble leftovers (`._*`) are not images — filter them out.
         gt_by_stem = {p.stem: p for p in src_gt.iterdir()
                       if p.is_file() and not p.name.startswith("._")}
         for img in sorted(p for p in src_im.iterdir()
                           if p.is_file() and not p.name.startswith("._")):
             gt = gt_by_stem.get(img.stem)
             if gt is None:
-                continue  # gt'siz görsel eğitime giremez
-            # generation klasörleri arasında ad çakışması olabilir -> öneksle
+                continue  # an image without gt cannot enter training
+            # name collisions are possible across generation folders -> prefix
             stem = f"{gen_dir.name}_{img.stem}"
             dst_i = out_im / f"{stem}{img.suffix}"
             dst_g = out_gt / f"{stem}{gt.suffix}"
@@ -505,9 +524,9 @@ def _download_toonout() -> int:
             shutil.copy2(gt, dst_g)
             copied += 1
     shutil.rmtree(extract_root, ignore_errors=True)
-    assert copied > 0, "ToonOut train tar'larından hiç im/gt çifti çıkarılamadı."
-    print(f"toonout (train split): {copied} im/gt çifti -> {TOONOUT_DIR} (test split'e DOKUNULMADI).")
-    assert copied > 0, "ToonOut train split'inden hiç im/gt çifti çıkarılamadı!"
+    assert copied > 0, "No im/gt pairs could be extracted from the ToonOut train tars."
+    print(f"toonout (train split): {copied} im/gt pairs -> {TOONOUT_DIR} (the test split was NOT TOUCHED).")
+    assert copied > 0, "No im/gt pairs could be extracted from the ToonOut train split!"
     return copied
 
 
@@ -522,7 +541,7 @@ def stage_downloads() -> dict:
     try:
         results["trans460"] = _download_trans460(source_defs)
     except Exception as e:
-        print(f"UYARI: transparent_460 indirilemedi ({e}); mevcutsa diskteki kullanılacak.")
+        print(f"WARNING: transparent_460 could not be downloaded ({e}); the on-disk copy will be used if present.")
         results["trans460"] = -1
 
     results["him2k_merged"] = _ensure_him2k_merged(source_defs)
@@ -530,17 +549,18 @@ def stage_downloads() -> dict:
     results["toonout"] = _download_toonout()
 
     counts = {name: _count_files(Path(rel)) for name, rel in RAW_DIR_CHECKS.items()}
-    print("İndirme sonrası dosya sayıları:", counts)
+    print("File counts after downloads:", counts)
     report("downloads", "done", results=results, counts=counts)
     return results
 
 
 # ==========================================================================
-# Stage "fonts" — v4'e ÖZGÜ: Google Fonts deposundan (github.com/google/fonts)
-# ~20 OFL lisanslı TTF indirir -> /content/fonts. Her font tek tek try/except'li
-# (URL çürümesi tüm hücreyi durdurmasın); hiçbiri inmezse Colab VM'sinde hazır
-# bulunan DejaVu fontlarına düşülür. text kategorisi üretimi font ÇEŞİTLİLİĞİNE
-# ihtiyaç duyar (tek fontla üretilen yazılar modele genellenmez).
+# Stage "fonts" — v4-SPECIFIC: downloads ~20 OFL-licensed TTFs from the
+# Google Fonts repository (github.com/google/fonts) -> /content/fonts. Each
+# font has its own try/except (URL rot must not stop the whole cell); if none
+# download, we fall back to the DejaVu fonts preinstalled on the Colab VM.
+# Producing the text category needs font VARIETY (text rendered with a single
+# font does not generalize to the model).
 # ==========================================================================
 _GF_RAW = "https://raw.githubusercontent.com/google/fonts/main/"
 GOOGLE_FONT_PATHS = [
@@ -567,7 +587,7 @@ GOOGLE_FONT_PATHS = [
     "ofl/orbitron/Orbitron[wght].ttf",
 ]
 DEJAVU_GLOBS = [
-    "/usr/share/fonts/truetype/dejavu/DejaVu*.ttf",  # Colab/Ubuntu standart yolu
+    "/usr/share/fonts/truetype/dejavu/DejaVu*.ttf",  # standard Colab/Ubuntu path
     "/usr/share/fonts/TTF/DejaVu*.ttf",
 ]
 
@@ -578,9 +598,9 @@ def stage_fonts() -> int:
 
     ok, failed = 0, []
     for rel in GOOGLE_FONT_PATHS:
-        # Dosya adındaki [wght] köşeli ayraçları URL'de yüzde-kodlanmalı;
-        # yerelde ise ayraçsız sade bir ad kullanıyoruz (glob desenleriyle
-        # çakışmasın diye).
+        # The [wght] square brackets in the file name must be percent-encoded
+        # in the URL; locally we use a plain bracket-free name (so it cannot
+        # clash with glob patterns).
         target = FONT_DIR / Path(rel).name.replace("[", "_").replace("]", "_")
         if target.exists() and target.stat().st_size > 0:
             ok += 1
@@ -589,15 +609,15 @@ def stage_fonts() -> int:
         try:
             with urllib.request.urlopen(url, timeout=60) as resp:
                 data = resp.read()
-            assert data[:4] in (b"\x00\x01\x00\x00", b"OTTO", b"true"), "TTF/OTF imzası değil"
+            assert data[:4] in (b"\x00\x01\x00\x00", b"OTTO", b"true"), "not a TTF/OTF signature"
             target.write_bytes(data)
             ok += 1
         except Exception as e:
             failed.append((rel, str(e)))
-            print(f"UYARI: font indirilemedi ({rel}): {e}")
+            print(f"WARNING: font could not be downloaded ({rel}): {e}")
 
     if ok < 5:
-        print(f"Yalnız {ok} Google Fonts fontu inebildi — DejaVu fallback'ine düşülüyor.")
+        print(f"Only {ok} Google Fonts fonts could be downloaded — falling back to DejaVu.")
         import glob as _glob
 
         for pattern in DEJAVU_GLOBS:
@@ -607,58 +627,61 @@ def stage_fonts() -> int:
                     shutil.copy2(p, dst)
 
     total = len([p for p in FONT_DIR.iterdir() if p.suffix.lower() in {".ttf", ".otf"}])
-    print(f"/content/fonts: {total} font hazır ({ok} Google Fonts, {len(failed)} başarısız).")
+    print(f"/content/fonts: {total} fonts ready ({ok} Google Fonts, {len(failed)} failed).")
     if total == 0:
         raise RuntimeError(
-            "Hiç font indirilemedi ve DejaVu fallback'i de bulunamadı — text kategorisi "
-            "üretilemez. Ağ bağlantısını kontrol edin veya /content/fonts'a elle TTF koyun."
+            "No fonts could be downloaded and the DejaVu fallback was not found either — the "
+            "text category cannot be produced. Check the network connection or manually place "
+            "TTFs into /content/fonts."
         )
     report("fonts", "done", downloaded=ok, failed=len(failed), total=total)
     return total
 
 
 # ==========================================================================
-# Stage "textfx" — ÜRETİM: scripts/make_textfx.py (PARALEL çalışmada yazılıyor —
-# burada yalnız belgelenen imzası varsayılır: run(out_dir, bg_dir, fg_dirs,
-# toonout_dir, font_dir, seed, counts)). İmza/import uyuşmazlığında NET Türkçe
-# hata mesajıyla durulur, sessizce yarım veri üretilmez.
+# Stage "textfx" — PRODUCTION: scripts/make_textfx.py (being written in a
+# PARALLEL effort — here only its documented signature is assumed:
+# run(out_dir, bg_dir, fg_dirs, toonout_dir, font_dir, seed, counts)). On a
+# signature/import mismatch we stop with a CLEAR error message, we do not
+# silently produce half a dataset.
 # ==========================================================================
 def stage_textfx() -> dict:
     report("textfx", "running")
 
-    # Repo güncelliği guard'ı: text/fx kategorileri benchmark.testset.CATEGORIES'e
-    # make_textfx çalışmasıyla ekleniyor — eski klonda manifest doğrulaması
-    # (append_entries/load_manifest) "bilinmeyen kategori" ile patlardı; nedeni
-    # burada, en başta söylüyoruz.
+    # Repo freshness guard: the text/fx categories are added to
+    # benchmark.testset.CATEGORIES by the make_textfx effort — on a stale
+    # clone the manifest validation (append_entries/load_manifest) would blow
+    # up with "unknown category"; we state the cause here, up front.
     missing_cats = {"text", "fx", "illustration"} - CATEGORIES
     if missing_cats:
         raise RuntimeError(
-            f"benchmark.testset.CATEGORIES şu kategorileri tanımıyor: {sorted(missing_cats)} — "
-            f"repo klonunuz eski görünüyor (make_textfx çalışması bunları ekliyor). "
-            f"'git -C {WORKDIR} pull' çalıştırıp hücreyi yeniden koşun."
+            f"benchmark.testset.CATEGORIES does not know these categories: {sorted(missing_cats)} — "
+            f"your repo clone looks stale (the make_textfx effort adds them). "
+            f"Run 'git -C {WORKDIR} pull' and re-run the cell."
         )
 
     try:
-        import make_textfx as mtx  # scripts/ sys.path'te
+        import make_textfx as mtx  # scripts/ is on sys.path
     except ImportError as e:
         raise RuntimeError(
-            f"scripts/make_textfx.py import edilemedi ({e}) — bu script paralel bir çalışmada "
-            f"yazılıyor; repo'nuz güncel mi? 'git -C {WORKDIR} pull' deneyin. Script henüz "
-            f"merge edilmediyse bu hücreyi make_textfx hazır olunca koşun."
+            f"scripts/make_textfx.py could not be imported ({e}) — this script is being written "
+            f"in a parallel effort; is your repo up to date? Try 'git -C {WORKDIR} pull'. If the "
+            f"script has not been merged yet, run this cell once make_textfx is ready."
         ) from e
 
     fg_dirs = [d for d in (RAW / "trans460_train", RAW / "him2k_merged") if d.is_dir()]
     assert fg_dirs, (
-        "fx için hiç foreground kaynağı yok (trans460_train ve him2k_merged ikisi de eksik) — "
-        "'downloads' aşaması loglarını inceleyin."
+        "No foreground source for fx at all (both trans460_train and him2k_merged are missing) — "
+        "inspect the 'downloads' stage logs."
     )
 
-    # illustration hedefi ToonOut havuzundan HESAPLANIR: make_textfx.run(),
-    # counts'ta VERİLMEYEN kategoriyi 0 sayar ("otomatik" diye bir davranışı
-    # yok — ilk koşuda bu yüzden illustration hiç üretilmedi). Her çift 3
-    # kopya üretir (c00/c01 kompozit + c02 orijinal), havuzun tamamı kullanılır.
+    # The illustration target is COMPUTED from the ToonOut pool:
+    # make_textfx.run() counts a category NOT GIVEN in counts as 0 (it has no
+    # "automatic" behavior — this is why illustration was never produced in
+    # the first run). Each pair produces 3 copies (c00/c01 composite + c02
+    # original), the whole pool is used.
     n_toonout = len(mtx._pairs_from_dir(TOONOUT_DIR))
-    assert n_toonout > 0, f"{TOONOUT_DIR} altında im/gt çifti yok — 'downloads' loglarına bakın."
+    assert n_toonout > 0, f"No im/gt pairs under {TOONOUT_DIR} — check the 'downloads' logs."
     run_counts = dict(TEXTFX_COUNTS)
     run_counts["illustration"] = 3 * n_toonout
 
@@ -674,68 +697,70 @@ def stage_textfx() -> dict:
         )
     except TypeError as e:
         raise RuntimeError(
-            f"make_textfx.run() beklenen imzayla çağrılamadı ({e}) — bu hücre "
-            f"run(out_dir, bg_dir, fg_dirs, toonout_dir, font_dir, seed, counts) imzasını "
-            f"varsayar (paralel çalışmanın belgelenen sözleşmesi). scripts/make_textfx.py'nin "
-            f"güncel imzasına bakıp çağrıyı uyarlayın."
+            f"make_textfx.run() could not be called with the expected signature ({e}) — this cell "
+            f"assumes the run(out_dir, bg_dir, fg_dirs, toonout_dir, font_dir, seed, counts) "
+            f"signature (the documented contract of the parallel effort). Check the current "
+            f"signature of scripts/make_textfx.py and adapt the call."
         ) from e
 
-    print("make_textfx.run() kategori bazlı üretim:", counts)
+    print("make_textfx.run() per-category production:", counts)
 
-    # Manifest guard'ı (v3 dersi): boş/eksik manifest'le export'a GEÇME.
-    # DİKKAT: make_textfx'in çıktı manifest'i {"id","category"} satırlarıdır —
-    # benchmark.testset.load_manifest (image/gt_alpha zorunlu) BURADA KULLANILMAZ,
-    # tcl.ensure_manifest_pairs de o şemayı beklediği için kullanılamaz.
+    # Manifest guard (the v3 lesson): do NOT PROCEED to export with an
+    # empty/missing manifest. CAUTION: make_textfx's output manifest has
+    # {"id","category"} rows — benchmark.testset.load_manifest (which requires
+    # image/gt_alpha) is NOT USED HERE, and tcl.ensure_manifest_pairs cannot
+    # be used either because it expects that schema.
     out_manifest = TEXTFX_OUT_DIR / "manifest.jsonl"
     if not out_manifest.exists():
-        raise RuntimeError(f"{out_manifest} yok — make_textfx üretimi başarısız olmuş olmalı.")
+        raise RuntimeError(f"{out_manifest} does not exist — make_textfx production must have failed.")
     rows = [json.loads(line) for line in out_manifest.read_text().splitlines() if line.strip()]
     total_pairs = len(rows)
     if total_pairs == 0:
-        raise RuntimeError(f"{out_manifest} boş — export'a geçilmiyor (v3 dersi).")
+        raise RuntimeError(f"{out_manifest} is empty — not proceeding to export (the v3 lesson).")
 
-    # export_birefnet.export() TAM testset şeması ister (image + gt_alpha
-    # yolları) — {"id","category"} satırlarından türetip yanına yazıyoruz.
-    # Yol sözleşmesi make_textfx._save_pair ile aynı: im/{id}.jpg + gt/{id}.png.
+    # export_birefnet.export() requires the FULL testset schema (image +
+    # gt_alpha paths) — we derive it from the {"id","category"} rows and write
+    # it alongside. The path contract is the same as make_textfx._save_pair:
+    # im/{id}.jpg + gt/{id}.png.
     full_manifest = TEXTFX_OUT_DIR / "manifest_full.jsonl"
     with open(full_manifest, "w") as f:
         for r in rows:
             im_p = TEXTFX_OUT_DIR / "im" / f"{r['id']}.jpg"
             gt_p = TEXTFX_OUT_DIR / "gt" / f"{r['id']}.png"
             if not (im_p.exists() and gt_p.exists()):
-                raise RuntimeError(f"manifest satırının dosyası eksik: {r['id']} — üretim yarım kalmış olabilir.")
+                raise RuntimeError(f"file for manifest row is missing: {r['id']} — production may have been cut short.")
             f.write(json.dumps({"id": r["id"], "image": str(im_p),
                                 "category": r["category"], "gt_alpha": str(gt_p)},
                                ensure_ascii=False) + "\n")
     by_cat: dict[str, int] = {}
     for r in rows:
         by_cat[r["category"]] = by_cat.get(r["category"], 0) + 1
-    print(f"PRE-FLIGHT — {out_manifest}: toplam {total_pairs} çift, kategori bazında:")
+    print(f"PRE-FLIGHT — {out_manifest}: {total_pairs} pairs total, by category:")
     for cat, n in sorted(by_cat.items(), key=lambda kv: -kv[1]):
         print(f"  {cat}: {n}")
     low = {c: by_cat.get(c, 0) for c in V4_NEW_CATEGORIES if by_cat.get(c, 0) < 100}
     if low:
-        print(f"UYARI: şu v4 kategorileri 100 örneğin ALTINDA: {low} — train_colab.ipynb'nin "
-              f"v4 ön-uçuş guard'ı bu durumda GPU koşusunu durduracaktır.")
+        print(f"WARNING: these v4 categories are BELOW 100 samples: {low} — train_colab.ipynb's "
+              f"v4 pre-flight guard will stop the GPU run in this situation.")
 
     report("textfx", "done", counts=counts, by_category=by_cat, total_pairs=total_pairs)
     return by_cat
 
 
 # ==========================================================================
-# Stage "export" — v3 kalıbı (export_birefnet.export() DEĞİŞMEDİ): taze/boş
-# bir yerel dizine karşı çalıştığından diskte yalnız yeni textfx dosyaları
-# oluşur (kaynak manifest zaten yalnız text/fx/illustration satırları içeriyor).
-# split_name="TRAIN": yeni stemler HER ZAMAN TRAIN'e gider, VAL'e HİÇBİR yeni
-# stem gitmez (mevcut kural).
+# Stage "export" — v3 pattern (export_birefnet.export() is UNCHANGED):
+# because it runs against a fresh/empty local directory, only the new textfx
+# files appear on disk (the source manifest already contains only
+# text/fx/illustration rows). split_name="TRAIN": new stems ALWAYS go to
+# TRAIN, NO new stem goes to VAL (existing rule).
 # ==========================================================================
 def stage_export_textfx() -> dict:
     report("export", "running")
-    import export_birefnet as eb  # scripts/ sys.path'te
+    import export_birefnet as eb  # scripts/ is on sys.path
 
-    # manifest_full.jsonl: stage_textfx'in export şemasına (image+gt_alpha)
-    # dönüştürdüğü manifest — ham manifest.jsonl {"id","category"} olduğundan
-    # export'a DOĞRUDAN verilemez.
+    # manifest_full.jsonl: the manifest stage_textfx converted to the export
+    # schema (image+gt_alpha) — the raw manifest.jsonl is {"id","category"},
+    # so it cannot be given to the export DIRECTLY.
     stats = eb.export(
         manifest_path=str(TEXTFX_OUT_DIR / "manifest_full.jsonl"),
         out_dir=EXPORT_DIR,
@@ -747,11 +772,11 @@ def stage_export_textfx() -> dict:
 
 
 # ==========================================================================
-# Stage "drive_copy" — v3 kalıbı: var olan Drive TRAIN'e MERGE (dirs_exist_ok=
-# True, hiçbir dosya SİLİNMEZ/üzerine yazılmaz; src kökündeki KISMİ stats.json
-# Drive'daki otoriter TAM stats.json'u ezmesin diye KOPYALANMAZ — v3 reviewer
-# bulgusu #1) + kompozit manifest'e APPEND (tcl.merge_composite_manifest,
-# dedupe'lu — tam üzerine yazma YOK).
+# Stage "drive_copy" — v3 pattern: MERGE into the existing Drive TRAIN
+# (dirs_exist_ok=True, NO file is DELETED/overwritten; the PARTIAL stats.json
+# at the src root is NOT COPIED so it cannot clobber the authoritative FULL
+# stats.json on Drive — v3 reviewer finding #1) + APPEND to the composite
+# manifest (tcl.merge_composite_manifest, deduped — NO full overwrite).
 # ==========================================================================
 def stage_drive_copy_textfx() -> None:
     report("drive_copy", "running")
@@ -760,15 +785,16 @@ def stage_drive_copy_textfx() -> None:
     dst_train_im = dst / "TRAIN" / "im"
     dst_train_gt = dst / "TRAIN" / "gt"
     assert dst_train_im.is_dir() and dst_train_gt.is_dir(), (
-        f"Drive'da beklenen v1-v3 TRAIN verisi bulunamadı: {dst_train_im} / {dst_train_gt} — "
-        f"bu hücre yalnız MEVCUT bir veri setine v4 (text/fx/illustration) EKLEMEK içindir, "
-        f"sıfırdan veri seti oluşturmak için colab_devam_hucresi.py kullanılmalı."
+        f"Expected v1-v3 TRAIN data not found on Drive: {dst_train_im} / {dst_train_gt} — "
+        f"this cell is only for ADDING v4 (text/fx/illustration) to an EXISTING dataset; "
+        f"to build a dataset from scratch, colab_devam_hucresi.py must be used."
     )
 
     def _listdir_retry(d: Path, attempts: int = 4, wait_s: int = 30) -> list[Path]:
-        """Drive FUSE 42k+ dosyalı dizinlerde ara sıra 'Errno 5 I/O error' verir
-        (geçici — v3 koşusunda da görüldü, tekrar denemek yetti). Bunun için
-        bekleyerek yeniden dener; son denemede hatayı olduğu gibi yükseltir."""
+        """Drive FUSE occasionally throws 'Errno 5 I/O error' on directories
+        with 42k+ files (transient — also seen in the v3 run, retrying was
+        enough). For that, it retries with a wait; on the last attempt it
+        re-raises the error as-is."""
         import time
         for i in range(attempts):
             try:
@@ -776,57 +802,61 @@ def stage_drive_copy_textfx() -> None:
             except OSError as e:
                 if i == attempts - 1:
                     raise
-                print(f"UYARI: {d} listelenirken {e} — {wait_s}s bekleyip yeniden denenecek "
+                print(f"WARNING: {e} while listing {d} — waiting {wait_s}s and retrying "
                       f"({i + 1}/{attempts - 1}).")
                 time.sleep(wait_s)
         raise AssertionError("unreachable")
 
     src_im_files = list((src / "TRAIN" / "im").iterdir())
     src_gt_files = list((src / "TRAIN" / "gt").iterdir())
-    # im ve gt AYRI sayılır: yarım kalmış bir önceki yükleme (VM kapanırken
-    # Drive flush'ı bitmemişse) im'i ulaşmış ama gt'si ulaşmamış çiftler
-    # bırakabilir — tek `expected_growth` iki dizinde farklı büyümeyi yanlışlıkla
-    # hata sanır (2026-07-12 v4 koşusunda yaşandı: 7200 kırık çift).
+    # im and gt are counted SEPARATELY: a previous half-finished upload (if
+    # the Drive flush did not complete while the VM was shutting down) can
+    # leave pairs whose im arrived but whose gt did not — a single
+    # `expected_growth` would mistakenly treat different growth in the two
+    # directories as an error (this happened in the 2026-07-12 v4 run: 7200
+    # broken pairs).
     existing_dst_im_stems = {p.stem for p in _listdir_retry(dst_train_im)}
     existing_dst_gt_stems = {p.stem for p in _listdir_retry(dst_train_gt)}
     growth_im = len({p.stem for p in src_im_files} - existing_dst_im_stems)
     growth_gt = len({p.stem for p in src_gt_files} - existing_dst_gt_stems)
 
     pre_im, pre_gt = len(existing_dst_im_stems), len(existing_dst_gt_stems)
-    print(f"Merge öncesi Drive TRAIN: im={pre_im}, gt={pre_gt} — beklenen artış: im +{growth_im}, gt +{growth_gt}")
+    print(f"Drive TRAIN before merge: im={pre_im}, gt={pre_gt} — expected growth: im +{growth_im}, gt +{growth_gt}")
 
-    # YALNIZ TRAIN/ alt ağacı kopyalanır — src kökündeki stats.json BİLİNÇLİ
-    # OLARAK KOPYALANMAZ (v3 fix'i: kısmi stats.json otoriter TAM stats.json'u
-    # sessizce EZERDİ).
-    print(f"Kopyalanıyor (MERGE, silme yok, yalnız TRAIN/): {src / 'TRAIN'} -> {dst / 'TRAIN'}")
+    # ONLY the TRAIN/ subtree is copied — the stats.json at the src root is
+    # DELIBERATELY NOT COPIED (the v3 fix: the partial stats.json would
+    # silently CLOBBER the authoritative FULL stats.json).
+    print(f"Copying (MERGE, no deletion, TRAIN/ only): {src / 'TRAIN'} -> {dst / 'TRAIN'}")
     shutil.copytree(src / "TRAIN", dst / "TRAIN", dirs_exist_ok=True)
 
     post_im, post_gt = len(_listdir_retry(dst_train_im)), len(_listdir_retry(dst_train_gt))
-    print(f"Merge sonrası Drive TRAIN: im={post_im}, gt={post_gt}")
+    print(f"Drive TRAIN after merge: im={post_im}, gt={post_gt}")
 
     assert post_im - pre_im == growth_im, (
-        f"im/ büyümesi beklenenle uyuşmuyor: {post_im - pre_im} != {growth_im}"
+        f"im/ growth does not match the expectation: {post_im - pre_im} != {growth_im}"
     )
     assert post_gt - pre_gt == growth_gt, (
-        f"gt/ büyümesi beklenenle uyuşmuyor: {post_gt - pre_gt} != {growth_gt}"
+        f"gt/ growth does not match the expectation: {post_gt - pre_gt} != {growth_gt}"
     )
-    assert len(src_im_files) == len(src_gt_files), "yerel textfx export'unda im/gt sayıları uyuşmuyor!"
-    # ASIL bütünlük şartı: merge sonrası her yerel stem'in im'i VE gt'si Drive'da.
-    assert post_im == post_gt, f"Drive TRAIN im/gt sayıları eşit değil: {post_im} != {post_gt}"
+    assert len(src_im_files) == len(src_gt_files), "im/gt counts do not match in the local textfx export!"
+    # The TRUE integrity condition: after the merge, every local stem's im AND gt are on Drive.
+    assert post_im == post_gt, f"Drive TRAIN im/gt counts are not equal: {post_im} != {post_gt}"
 
-    # manifest_full.jsonl: merge_composite_manifest içerideki load_manifest
-    # doğrulaması TAM şema (image+gt_alpha) istediği için ham manifest.jsonl verilemez.
+    # manifest_full.jsonl: the load_manifest validation inside
+    # merge_composite_manifest requires the FULL schema (image+gt_alpha), so
+    # the raw manifest.jsonl cannot be given.
     comp_manifest_local = TEXTFX_OUT_DIR / "manifest_full.jsonl"
     comp_manifest_drive = dst / "train_composites_manifest.jsonl"
     n_appended = tcl.merge_composite_manifest(comp_manifest_local, comp_manifest_drive)
-    print(f"train_composites_manifest.jsonl: {n_appended} yeni satır eklendi (Drive'daki mevcut "
-          f"v1-v3 satırları KORUNDU, üzerine yazılmadı).")
-    # n_appended, manifest'te henüz olmayan id sayısıdır — onarım koşusunda
-    # satırlar zaten eklenmiş olduğundan 0 olabilir; dosya büyümesine eşitlik
-    # ŞART DEĞİL (2026-07-12 dersi). Yeterli şart: dedupe'lu ekleme hatasızsa
-    # ve dosya sayıları eşitse bütünlük tamam.
+    print(f"train_composites_manifest.jsonl: {n_appended} new rows appended (the existing "
+          f"v1-v3 rows on Drive were PRESERVED, not overwritten).")
+    # n_appended is the count of ids not yet in the manifest — on a repair run
+    # the rows may already have been appended, so it can be 0; equality with
+    # the file growth is NOT REQUIRED (the 2026-07-12 lesson). Sufficient
+    # condition: if the deduped append is error-free and the file counts are
+    # equal, integrity holds.
 
-    print("\nBÜTÜNLÜK KONTROLÜ BAŞARILI — v4 (text/fx/illustration) verisi Drive'a MERGE edildi.")
+    print("\nINTEGRITY CHECK PASSED — v4 (text/fx/illustration) data was MERGED into Drive.")
     report(
         "drive_copy", "done",
         added_im=growth_im, added_gt=growth_gt, added_manifest_rows=n_appended,
@@ -836,24 +866,26 @@ def stage_drive_copy_textfx() -> None:
 
 
 # ==========================================================================
-# Orkestrasyon — üst düzeyde koşar (hücre yapıştırılıp çalıştırıldığında).
+# Orchestration — runs at top level (when the cell is pasted and executed).
 # ==========================================================================
 def main() -> None:
-    stage0_env_sanity()        # Drive mount + git pull BURADA — Drive'a dokunan her şeyden önce
+    stage0_env_sanity()        # Drive mount + git pull happen HERE — before anything that touches Drive
     stage_downloads()          # ToonOut(train) + BG-20k + trans460 + HIM2K (idempotent)
     stage_fonts()              # ~20 OFL Google Fonts -> /content/fonts (DejaVu fallback)
-    stage_textfx()             # make_textfx.run() + manifest guard + kategori pre-flight
+    stage_textfx()             # make_textfx.run() + manifest guard + category pre-flight
     stage_export_textfx()
     stage_drive_copy_textfx()
     report("ALL", "done")
-    # KRİTİK (2026-07-12 dersi): Drive yazımları ASENKRON tamponlanır — VM bu
-    # flush bitmeden kapatılırsa dosyalar SESSİZCE kaybolur (7200 kırık çift
-    # böyle oluştu). flush_and_unmount() tamponu boşaltmayı ZORLAR ve bitene
-    # kadar bloklar. Drive'a yazan HER ŞEYDEN (report dahil) SONRA çağrılır.
-    print("Drive flush ediliyor (asenkron yazımların buluta inmesi bekleniyor)...")
+    # CRITICAL (the 2026-07-12 lesson): Drive writes are buffered
+    # ASYNCHRONOUSLY — if the VM is shut down before this flush completes, the
+    # files are SILENTLY lost (that is how the 7200 broken pairs came to be).
+    # flush_and_unmount() FORCES the buffer to drain and blocks until it
+    # finishes. It is called AFTER everything that writes to Drive (including
+    # report).
+    print("Flushing Drive (waiting for async writes to land in the cloud)...")
     from google.colab import drive as _gdrive
     _gdrive.flush_and_unmount()
-    print("Drive flush TAMAM — VM artık güvenle kapatılabilir/değiştirilebilir.")
+    print("Drive flush COMPLETE — the VM can now be safely shut down/swapped.")
 
 
 try:

@@ -1,8 +1,8 @@
-# Lucida v7 karşılaştırma (203 görsel, MAE — düşük iyi)
+# Lucida v7 comparison (203 images, MAE — lower is better)
 
-Kaynak: `results/baseline/metrics.json` (`per_category` bölümü), 2026-07 v7 koşusu.
+Source: `results/baseline/metrics.json` (`per_category` section), 2026-07 v7 run.
 
-| kategori | lucida-v7 | lucida-v7+refine | lucida-v6 | inspyrenet | ideogram | rmbg-2.0 | birefnet-hr |
+| category | lucida-v7 | lucida-v7+refine | lucida-v6 | inspyrenet | ideogram | rmbg-2.0 | birefnet-hr |
 |---|---|---|---|---|---|---|---|
 | camouflage | 0.0270 | 0.0256 | 0.0249 | 0.0582 | 0.1179 | 0.1405 | 0.0752 |
 | transparent | 0.0358 | 0.0371 | 0.0403 | 0.0725 | 0.0343 | 0.0741 | 0.0687 |

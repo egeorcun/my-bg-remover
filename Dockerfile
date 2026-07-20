@@ -1,31 +1,31 @@
-# Lucida background remover — CPU imajı.
-# Model ağırlıkları imaja gömülmez; ilk istekte HuggingFace'ten indirilir.
-# Kalıcı cache için: -v hf-cache:/root/.cache/huggingface
+# Lucida background remover — CPU image.
+# Model weights are not embedded in the image; downloaded from HuggingFace on the first request.
+# For a persistent cache: -v hf-cache:/root/.cache/huggingface
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     HF_HOME=/root/.cache/huggingface
 
-# opencv (transparent-background bağımlılığı) çalışma zamanında libGL ister.
+# opencv (a transparent-background dependency) needs libGL at runtime.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Torch'u önce CPU wheel'inden kur — varsayılan CUDA wheel'leri imajı
-# gereksizce (~GB'larca) büyütür. GPU imajı için bu satırı kaldırıp
-# `--index-url https://download.pytorch.org/whl/cu124` kullanın.
+# Install torch from the CPU wheel first — the default CUDA wheels bloat the
+# image needlessly (by ~GBs). For a GPU image drop this line and use
+# `--index-url https://download.pytorch.org/whl/cu124`.
 RUN pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
-# Paket kurulumu (wheel yalnızca bgr/ ve benchmark/ içerir).
+# Package install (the wheel contains only bgr/ and benchmark/).
 COPY pyproject.toml ./
 COPY bgr/ bgr/
 COPY benchmark/ benchmark/
 RUN pip install .
 
-# Servis kodu pakete dahil değil; workdir'den import edilir.
+# The serving code is not part of the package; imported from the workdir.
 COPY serving/ serving/
 
 EXPOSE 8000

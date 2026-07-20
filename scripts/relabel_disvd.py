@@ -1,13 +1,13 @@
-"""DIS-VD manifest satırlarını dosya adı token'larından yeniden etiketle (thin/complex).
+"""Relabel DIS-VD manifest rows from their filename tokens (thin/complex).
 
-Kullanım:
+Usage:
     uv run python scripts/relabel_disvd.py
 
-Sebep: sample_disvd_multi() ilk halde DIS-VD havuzunu thin/complex/general'e RASTGELE
-dağıtıyordu. Gerçek DIS5K sınıfı id'nin içine kodlu (ör.
-disvd_thin_20_Sports_8_Racket_4827171149_3140bffe12_o -> sınıf 'Racket'). Bu script
-YALNIZCA 'category' alanını, classify_disvd() ile yeniden hesaplayarak düzeltir;
-id/dosya adları DEĞİŞMEZ (önbelleklenmiş model çıktıları geçerliliğini korur).
+Reason: sample_disvd_multi() initially distributed the DIS-VD pool RANDOMLY across
+thin/complex/general. The real DIS5K class is encoded inside the id (e.g.
+disvd_thin_20_Sports_8_Racket_4827171149_3140bffe12_o -> class 'Racket'). This
+script ONLY fixes the 'category' field by recomputing it with classify_disvd();
+ids/filenames DO NOT CHANGE (cached model outputs remain valid).
 """
 import json
 import sys
@@ -31,7 +31,7 @@ def main() -> None:
         old_cat = row["category"]
         cls = parse_disvd_class(row["id"])
         new_cat = classify_disvd(row["id"])
-        print(f"{row['id']}: sınıf={cls!r} kategori {old_cat!r} -> {new_cat!r}")
+        print(f"{row['id']}: class={cls!r} category {old_cat!r} -> {new_cat!r}")
         if new_cat != old_cat:
             changed += 1
         row["category"] = new_cat
@@ -41,8 +41,8 @@ def main() -> None:
     counts: dict[str, int] = {}
     for row in rows:
         counts[row["category"]] = counts.get(row["category"], 0) + 1
-    print(f"\n{changed} DIS-VD satırı yeniden etiketlendi.")
-    print("Nihai manifest kategori dağılımı:")
+    print(f"\n{changed} DIS-VD rows relabeled.")
+    print("Final manifest category distribution:")
     for cat, n in sorted(counts.items()):
         print(f"  {cat}: {n}")
 

@@ -1,4 +1,4 @@
-"""Segmenter + refiner + decontaminator'ı tek arayüzde birleştirir."""
+"""Combines segmenter + refiner + decontaminator behind a single interface."""
 import numpy as np
 from PIL import Image
 

@@ -1,41 +1,42 @@
-"""Faz 3 (`training/train_colab.ipynb`) için saf-Python, bağımlılıksız yardımcı
-mantık. Bilinçli olarak `torch`/`PIL` içe aktarmaz — böylece hem Colab'da (BiRefNet
-eğitim döngüsü içinde) hem de bu depoda GPU/torch olmadan `pytest` ile test
-edilebilir (bkz. `tests/test_train_colab_lib.py`). Notebook bu dosyayı repo'yu
-klonladıktan sonra `sys.path`'e ekleyip import eder (`scripts/` için kullanılan
-"TEK DOĞRULUK KAYNAĞI" deseniyle aynı — bkz. `training/prepare_data_colab.ipynb`
-hücre (d) notu) — mantık notebook içine kopyalanıp tekrar yazılmaz, drift riski
-böylece ortadan kalkar.
+"""Pure-Python, dependency-free helper logic for Phase 3
+(`training/train_colab.ipynb`). Deliberately does NOT import `torch`/`PIL` — so
+it can be tested both on Colab (inside the BiRefNet training loop) and in this
+repo with `pytest`, without a GPU/torch (see `tests/test_train_colab_lib.py`).
+The notebook adds this file to `sys.path` after cloning the repo and imports it
+(the same "SINGLE SOURCE OF TRUTH" pattern used for `scripts/` — see the cell
+(d) note in `training/prepare_data_colab.ipynb`) — the logic is never copied and
+rewritten inside the notebook, which eliminates the drift risk.
 
-Altı bağımsız endişe kapsar:
-1. Kategori ağırlıklı örnekleme (`compute_sample_weights` / `compute_expected_shares`)
-   — `torch.utils.data.WeightedRandomSampler`'a beslenecek ağırlıkları hesaplar.
-2. Checkpoint keşfi/budama (`find_latest_checkpoint` / `prune_old_checkpoints`)
-   — Colab oturum kopması sonrası otomatik devam + Drive disk kotasını sınırlama.
-3. Deterministik + KALICI TRAIN/VAL bölünmesi (`deterministic_val_split` /
-   `load_or_create_val_split`) + sabit hızlı-değerlendirme alt kümesi
+Covers six independent concerns:
+1. Category-weighted sampling (`compute_sample_weights` / `compute_expected_shares`)
+   — computes the weights fed into `torch.utils.data.WeightedRandomSampler`.
+2. Checkpoint discovery/pruning (`find_latest_checkpoint` / `prune_old_checkpoints`)
+   — automatic resume after a Colab session drop + capping Drive disk quota usage.
+3. Deterministic + PERSISTENT TRAIN/VAL split (`deterministic_val_split` /
+   `load_or_create_val_split`) + fixed quick-evaluation subset
    (`fixed_eval_subset`).
-4. BiRefNet resmi `train.py`/`config.py` mantığının iki küçük parçasının yeniden
-   üretimi (`should_apply_finetune_reweight`, `effective_lr`) — bkz. modül
-   içindeki fonksiyon docstring'lerinde satır bazlı referanslar.
-5. BiRefNet `config.py` metin yaması (`apply_config_patches`) — İDEMPOTENT
-   (aynı VM'de notebook'un yeniden koşturulması patlamamalı).
-6. Drive→yerel disk veri kopyalama (`copy_pairs`) — hem im hem gt dosya boyutu
-   doğrulamalı (yarım kalmış/kesilmiş kopyalar onarılır).
-7. v3 — VAL sızıntı hariç tutma + kompozit manifest merge + boş-manifest
-   koruması (`strip_composite_copy_suffix` / `derive_val_excluded_source_ids` /
-   `merge_composite_manifest` / `ensure_manifest_pairs`) — `training/
-   v3_veri_guncelleme_hucresi.py`'nin `_o00` üretimi öncesi VAL kümesini hariç
-   tutması, Drive'daki kompozit manifest'i (üzerine yazmadan) güncellemesi ve
-   boş bir manifest'le export'a geçmeyi erken/yüksek sesle engellemesi için
-   (bkz. o dosyanın modül docstring'i).
-8. TRAIN verisinin Drive'da tar shard'larına paketlenmesi/tüketilmesi
+4. Reproductions of two small pieces of the official BiRefNet
+   `train.py`/`config.py` logic (`should_apply_finetune_reweight`,
+   `effective_lr`) — see the line-level references in the per-function
+   docstrings within this module.
+5. BiRefNet `config.py` text patching (`apply_config_patches`) — IDEMPOTENT
+   (re-running the notebook on the same VM must not blow up).
+6. Drive -> local disk data copying (`copy_pairs`) — with file-size validation
+   for both im and gt (half-finished/truncated copies get repaired).
+7. v3 — VAL leak exclusion + composite manifest merge + empty-manifest
+   guard (`strip_composite_copy_suffix` / `derive_val_excluded_source_ids` /
+   `merge_composite_manifest` / `ensure_manifest_pairs`) — so that `training/
+   v3_veri_guncelleme_hucresi.py` can exclude the VAL set before its `_o00`
+   generation, update the composite manifest on Drive (without overwriting it),
+   and stop an export from proceeding on an empty manifest early and loudly
+   (see that file's module docstring).
+8. Packing/consuming the TRAIN data as tar shards on Drive
    (`tar_shard_name` / `split_stems_to_shards` / `validate_tar_manifest`) —
-   `training/veri_tar_paketleme_hucresi.py` (paketleyen, ücretsiz CPU Colab
-   hücresi) ile `train_colab.ipynb` hücre (c)'nin (indirip açan taraf) ORTAK
-   sözleşmesi: 52k+ küçük dosyayı Drive FUSE'dan tek tek kopyalamak (~75 dk,
-   ara sıra geçici 'Errno 5') yerine ~8 büyük tar shard'ı kopyalanıp lokalde
-   açılır (~10 dk).
+   the SHARED contract between `training/veri_tar_paketleme_hucresi.py` (the
+   packing side, a free CPU Colab cell) and `train_colab.ipynb` cell (c) (the
+   side that downloads and extracts): instead of copying 52k+ small files one
+   by one over the Drive FUSE mount (~75 min, with occasional transient
+   'Errno 5'), ~8 large tar shards are copied and extracted locally (~10 min).
 """
 from __future__ import annotations
 
@@ -51,15 +52,17 @@ CKPT_FILENAME_RE = re.compile(r"^epoch_(\d+)\.pth$")
 
 
 # ============================================================================
-# 1) Kategori ağırlıklı örnekleme
+# 1) Category-weighted sampling
 # ============================================================================
 def load_stem_categories(manifest_path: str | Path) -> dict[str, str]:
-    """Kompozit manifest'ini (`benchmark.testset` formatı: id/image/category/gt_alpha
-    JSONL satırları — bkz. `scripts/export_birefnet.py` docstring'i, export sırasında
-    stem = row['id']) okuyup `{stem: category}` sözlüğü döndürür.
+    """Reads the composite manifest (`benchmark.testset` format:
+    id/image/category/gt_alpha JSONL rows — see the `scripts/export_birefnet.py`
+    docstring; during export, stem = row['id']) and returns a `{stem: category}`
+    dict.
 
-    Notebook bu dosyayı `Drive'daki bg-remover-data/train_composites_manifest.jsonl`
-    kopyasından okur (bkz. `training/colab_devam_hucresi.py` `stage7_drive_copy`)."""
+    The notebook reads this file from the `bg-remover-data/
+    train_composites_manifest.jsonl` copy on Drive (see
+    `training/colab_devam_hucresi.py` `stage7_drive_copy`)."""
     result: dict[str, str] = {}
     with open(manifest_path, encoding="utf-8") as f:
         for line in f:
@@ -72,14 +75,14 @@ def load_stem_categories(manifest_path: str | Path) -> dict[str, str]:
 
 
 SAMPLER_PRESET_V1: dict[str, float] = {"transparent": 0.20, "camouflage": 0.20}
-"""v1 fine-tune koşusunda (`epoch_1.pth`) fiilen kullanılan hedef —
-`docs/reports/2026-07-faz2-veri.md` §5 madde 3. Yalnız transparent+camouflage'ı
-sabitlediği için, geri kalan %60'lık pay hair/complex/thin/general arasında HAM
-sayılarıyla orantılı bölüşülüyordu; hair'in ham hacmi (~9422) complex (~2190) ve
-thin'in (~810) çok üzerinde olduğundan bu %60'ın büyük kısmını hair alıyor,
-complex/thin'e neredeyse hiç pay kalmıyordu — v1 karşılaştırma raporundaki
-"catastrophic forgetting"in (complex MAE 0.156 vs 0.024 baseline, thin 0.090 vs
-0.018, hair 0.013 vs 0.0045) kök nedeni."""
+"""The target actually used in the v1 fine-tune run (`epoch_1.pth`) —
+the project's internal phase report (removed from the repo) §5 item 3. Because it only pinned
+transparent+camouflage, the remaining 60% share was distributed among
+hair/complex/thin/general in proportion to their RAW counts; since hair's raw
+volume (~9422) far exceeded complex (~2190) and thin (~810), hair took most of
+that 60% and complex/thin got almost no share at all — the root cause of the
+"catastrophic forgetting" in the v1 comparison report (complex MAE 0.156 vs
+0.024 baseline, thin 0.090 vs 0.018, hair 0.013 vs 0.0045)."""
 
 SAMPLER_PRESET_V2: dict[str, float] = {
     "camouflage": 0.18,
@@ -89,20 +92,21 @@ SAMPLER_PRESET_V2: dict[str, float] = {
     "thin": 0.12,
     "general": 0.10,
 }
-"""v2 rebalancing hedefi (toplam TAM %100 — `compute_sample_weights` yalnız
-`sum > 1.0`'da ValueError fırlatır; toplam tam 1.0 iken manifest'te kategorisi
-bulunamayan `_other` stem'lere SIFIR ağırlık düşer, yani hiç örneklenmezler —
-bilinçli tercih: kategorisi bilinmeyen veri eğitim karışımını bulandırmasın;
-notebook hücre (e) zaten `n_unknown` sayısını konsola yazdırıyor). camouflage
-v1'deki %20'den %18'e hafifçe DÜŞÜRÜLDÜ (ham payı zaten ~%28-36 — v1'de sampler
-dışı bırakılsa bile doğal olarak büyük pay alırdı; v1 kazanımını korumaya %18
-yeter). transparent %20'de TUTULDU: ideogram skorlaması somutlaştırdı —
-transparent, bgr-v1'in ideogram'a KAYBETTİĞİ tek kategori (MAE 0.0437 vs
-0.0343, en yakın kovalama hedefi), payını kısmak yanlış olurdu. hair/complex/
-thin'e AÇIKÇA hedef verildi (v1'de hedefsizdi) — hair %20 (mutlak hatası zaten
-küçük, 0.013 MAE — toparlama hedefi mütevazı), complex %20, thin %12 — v1'de
-çöken kategorileri toparlamak için; general %10 kürasyonlu genel-amaçlı
-görseller. Bkz. `.superpowers/sdd/v2-hazirlik-report.md`."""
+"""v2 rebalancing target (sums to EXACTLY 100% — `compute_sample_weights` only
+raises ValueError on `sum > 1.0`; when the sum is exactly 1.0, `_other` stems
+whose category is missing from the manifest get ZERO weight, i.e. they are
+never sampled — a deliberate choice: data of unknown category must not muddy
+the training mix; notebook cell (e) already prints the `n_unknown` count to the
+console). camouflage was slightly LOWERED from v1's 20% to 18% (its raw share
+is already ~28-36% — even left out of the sampler in v1 it would naturally take
+a large share; 18% is enough to protect the v1 gains). transparent was KEPT at
+20%: the ideogram scoring made it concrete — transparent is the only category
+bgr-v1 LOSES to ideogram (MAE 0.0437 vs 0.0343, the closest chase target), so
+cutting its share would have been wrong. hair/complex/thin were given EXPLICIT
+targets (they had none in v1) — hair 20% (its absolute error is already small,
+0.013 MAE — a modest recovery target), complex 20%, thin 12% — to recover the
+categories that collapsed in v1; general 10% curated general-purpose images.
+See the internal review notes (not in the repo)."""
 
 SAMPLER_PRESET_V3: dict[str, float] = {
     "camouflage": 0.16,
@@ -112,30 +116,31 @@ SAMPLER_PRESET_V3: dict[str, float] = {
     "thin": 0.12,
     "general": 0.10,
 }
-"""v3 rebalancing hedefi (toplam TAM %100) — v2'nin gerçek benchmark sonuçlarından
-sonraki ayar (bkz. `results/baseline/metrics.json`, `.superpowers/sdd/
-v3-hazirlik-report.md`). İki somut bulguya cevap verir:
+"""v3 rebalancing target (sums to EXACTLY 100%) — the adjustment made after
+v2's real benchmark results (see `results/baseline/metrics.json`,
+the internal review notes (not in the repo)). It answers two concrete findings:
 
-1. **Domain gap / over-deletion kalıcılığı**: gerçek-fotoğraf benchmark'ında
-   over-deletion'ın v1→v2 arası düzelmemesinin kök nedeni, camouflage DIŞINDAKİ
-   TÜM kategorilerin yalnız SENTETİK kompozit arka planlarda eğitilmesiydi —
-   sampler payını değiştirmek bunu çözmez, veriye orijinal arka plan örnekleri
-   (`scripts/make_composites.py` `_o00` kopyaları — bkz. o dosyanın v3 notu)
-   eklemek gerekiyordu. Sampler tarafında yapılabilecek TEK şey, bu yeni verinin
-   epoch içinde yeterince görülmesini sağlamak.
-2. **transparent v1→v2 arası KÖTÜLEŞTİ** (MAE 0.0437→0.0481) — ideogram'ın
-   0.0343'lük hedefinden UZAKLAŞTIK (v2'nin %18'e düşürdüğü pay yanlış yönde
-   hareket etmiş olabilir). v3 transparent'ı %24'e (v2'nin %18'inden +6 puan)
-   YÜKSELTEREK ideogram'ı kovalamayı önceliklendiriyor — bu preset'in en büyük
-   tek payı.
-   camouflage v2'de zaten güçlü marj bırakıyor (bgr-v2 MAE 0.0310, en yakın
-   genel-amaçlı rakip birefnet-hr 0.0752 — %59 daha iyi, ideogram ise camo'da
-   ÇOK daha kötü: 0.1179) — bu marj sayesinde camo payı v2'nin %18'inden %16'ya
-   biraz daha düşürülüp kazanılan 2 puan transparent'a aktarılabildi. hair
-   %20'den %18'e (mutlak hatası zaten küçük, 0.0156 MAE), complex/thin/general
-   v2'deki değerlerinde (%20/%12/%10) KORUNDU (v1'in çöken kategorileri — bkz.
-   SAMPLER_PRESET_V2 docstring'i — toparlanmaya devam ediyor, henüz payı
-   azaltacak kanıt yok). Bkz. `.superpowers/sdd/v3-hazirlik-report.md`."""
+1. **Domain gap / persistence of over-deletion**: the root cause of
+   over-deletion not improving from v1 to v2 on the real-photo benchmark was
+   that ALL categories EXCEPT camouflage were trained only on SYNTHETIC
+   composited backgrounds — changing sampler shares cannot fix that; the data
+   needed original-background samples (`scripts/make_composites.py` `_o00`
+   copies — see that file's v3 note). The ONLY thing the sampler side can do
+   is make sure this new data is seen enough within the epoch.
+2. **transparent got WORSE from v1 to v2** (MAE 0.0437 -> 0.0481) — we moved
+   AWAY from ideogram's 0.0343 target (v2's cut to 18% may have moved in the
+   wrong direction). v3 RAISES transparent to 24% (+6 points over v2's 18%),
+   prioritizing the chase after ideogram — the single largest share in this
+   preset.
+   camouflage already leaves a strong margin in v2 (bgr-v2 MAE 0.0310, closest
+   general-purpose competitor birefnet-hr 0.0752 — 59% better; ideogram is MUCH
+   worse at camo: 0.1179) — thanks to that margin, the camo share could be
+   trimmed a bit further from v2's 18% to 16%, and the 2 points gained were
+   transferred to transparent. hair from 20% to 18% (its absolute error is
+   already small, 0.0156 MAE), complex/thin/general KEPT at their v2 values
+   (20%/12%/10%) (v1's collapsed categories — see the SAMPLER_PRESET_V2
+   docstring — are still recovering; no evidence yet to justify cutting their
+   share). See the internal review notes (not in the repo)."""
 
 SAMPLER_PRESET_V4: dict[str, float] = {
     "camouflage": 0.12,
@@ -148,31 +153,33 @@ SAMPLER_PRESET_V4: dict[str, float] = {
     "fx": 0.08,
     "illustration": 0.08,
 }
-"""v4 rebalancing hedefi (toplam TAM %100) — v3'ün gerçek benchmark sonuçlarından
-sonraki ayar. Kullanıcı v3 benchmark'ı sonrası odağı iki eksene kaydırdı:
-complex+thin'in toparlanmaya devam etmesi ve YENİ yeteneklerin kazanılması —
-logo/yazı koruma (`text`), obje etrafı VFX parıltı (`fx`) ve illüstrasyon
-(`illustration`); üç yeni kategorinin verisini `training/
-v4_veri_guncelleme_hucresi.py` üretir (`scripts/make_textfx.py` + ToonOut).
+"""v4 rebalancing target (sums to EXACTLY 100%) — the adjustment made after
+v3's real benchmark results. After the v3 benchmark the user shifted the focus
+to two axes: keeping complex+thin recovering, and acquiring NEW capabilities —
+logo/text preservation (`text`), around-object VFX glow (`fx`) and illustration
+(`illustration`); the data for the three new categories is produced by
+`training/v4_veri_guncelleme_hucresi.py` (`scripts/make_textfx.py` + ToonOut).
 
-1. **transparent %18'de TUTULDU**: Ideogram'ın 0.0343'lük hedefine yalnız
-   0.0043 kaldı — kovalamaca sürüyor, payı kısmak v2 dersinin (payı düşürünce
-   MAE kötüleşti, bkz. SAMPLER_PRESET_V3 docstring'i madde 2) tekrarı olurdu;
-   ama v3'teki %24'lük tek-en-büyük-pay da artık gerekmiyor, %18 koruma için
-   yeterli.
-2. **camouflage %12'ye DÜŞTÜ**: v3 MAE 0.0304 vs Ideogram 0.1179 — marj
-   DEVASA (Ideogram'ın yaklaşık dörtte biri). v2→v3'te %18→%16'ya inen pay,
-   bu marj sayesinde %12'ye kadar güvenle indirilebildi; serbest kalan puanlar
-   yeni kategorilere aktarıldı.
-3. **hair %8'e DÜŞTÜ**: 0.0067 MAE ile rmbg'nin 0.0045'ine zaten yakın —
-   pay azaltılabilir (v3'te %18'di; mutlak hata küçük, koruma için %8 yeter).
-4. **complex %19 / thin %13**: v3'teki %20/%12'ye yakın tutuldu (odak
-   kategoriler — v1'in çöken kategorileri hâlâ öncelikli, thin +1 puanla
-   hafifçe güçlendirildi). general %10'dan %4'e indi (kürasyonlu genel-amaçlı
-   görseller; yeni kategorilere yer açmak için en az riskli kesinti).
-5. **text %10 / fx %8 / illustration %8**: yeni yetenekler — toplam %26'lık
-   pay, modelin bu üç beceriyi sıfırdan öğrenmesine yetecek epoch-içi
-   görünürlük sağlar."""
+1. **transparent KEPT at 18%**: only 0.0043 away from Ideogram's 0.0343
+   target — the chase continues; cutting the share would repeat the v2 lesson
+   (MAE got worse when the share was cut, see SAMPLER_PRESET_V3 docstring
+   item 2); but v3's 24% single-largest-share is no longer needed either, 18%
+   is enough to protect it.
+2. **camouflage DOWN to 12%**: v3 MAE 0.0304 vs Ideogram 0.1179 — the margin
+   is ENORMOUS (roughly a quarter of Ideogram's). The share that went from
+   18% to 16% in v2->v3 could safely be lowered to 12% thanks to this margin;
+   the freed points were transferred to the new categories.
+3. **hair DOWN to 8%**: at 0.0067 MAE it is already close to rmbg's 0.0045 —
+   the share can be reduced (it was 18% in v3; the absolute error is small,
+   8% suffices for protection).
+4. **complex 19% / thin 13%**: kept close to v3's 20%/12% (the focus
+   categories — v1's collapsed categories are still the priority; thin was
+   slightly strengthened with +1 point). general went from 10% to 4% (curated
+   general-purpose images; the least risky cut to make room for the new
+   categories).
+5. **text 10% / fx 8% / illustration 8%**: the new capabilities — a combined
+   26% share, enough in-epoch visibility for the model to learn these three
+   skills from scratch."""
 
 SAMPLER_PRESET_V5: dict[str, float] = {
     "camouflage": 0.12,
@@ -185,18 +192,19 @@ SAMPLER_PRESET_V5: dict[str, float] = {
     "fx": 0.05,
     "illustration": 0.07,
 }
-"""v5 rebalancing hedefi (toplam TAM %100) — v4 benchmark'ının (191 görsel)
-görsel incelemesinden sonraki ayar. v4 bulguları: text 0.0119 (Ideogram
-GEÇİLDİ) ve illustration 0.0129 hedefleri TUTTURULDU -> payları %10/%8'den
-%7/%7'ye çekilebilir (kazanım koruma modu). Ancak iki kategori pay düşüşünün
-bedelini ödedi: transparent 0.0386->0.0405 (Ideogram 0.0343 hedefi kaçtı) ve
-hair 0.0067->0.0106 -> transparent %18->%22, hair %8->%12 GERİ YÜKSELTİLDİ.
-fx %8->%5: v4'te fx verisi hayaletleşmeye (katı nesnelerde ara-alpha; complex
-ara-alpha oranı %4.5->%5.9) katkı verdi — `make_textfx._render_fx_sample`ın
-v5 düzeltmesiyle (dar halo bandı, kısa çizgiler, bbox'a yoğun parçacıklar)
-birlikte payı da düşürüldü. complex %19 KORUNDU (InSPyReNet'in 0.0110'u
-kategori tavanının yüksekliğini gösterdi; bizim gerçekçi epoch-5 hedefi
-~0.045-0.055). camo %12 (marj devasa), general %4 değişmedi."""
+"""v5 rebalancing target (sums to EXACTLY 100%) — the adjustment made after
+visually reviewing the v4 benchmark (191 images). v4 findings: text 0.0119
+(Ideogram BEATEN) and illustration 0.0129 targets were MET -> their shares can
+be pulled back from 10%/8% to 7%/7% (gain-protection mode). But two categories
+paid the price of the share cuts: transparent 0.0386->0.0405 (the Ideogram
+0.0343 target slipped away) and hair 0.0067->0.0106 -> transparent 18%->22%
+and hair 8%->12% were RESTORED. fx 8%->5%: in v4 the fx data contributed to
+ghosting (mid-alpha on solid objects; complex mid-alpha ratio 4.5%->5.9%) —
+together with the v5 fix of `make_textfx._render_fx_sample` (narrow halo band,
+short streaks, particles concentrated on the bbox), its share was lowered too.
+complex KEPT at 19% (InSPyReNet's 0.0110 showed how high the category ceiling
+is; our realistic epoch-5 target is ~0.045-0.055). camo 12% (the margin is
+enormous), general 4% unchanged."""
 
 SAMPLER_PRESET_V7: dict[str, float] = {
     "camouflage": 0.10,
@@ -210,14 +218,15 @@ SAMPLER_PRESET_V7: dict[str, float] = {
     "illustration": 0.06,
     "design": 0.08,
 }
-"""v7 hedefi (toplam TAM %100) — issue #2 (baskı-tasarımı/sticker stil açığı)
-için yeni sentetik `design` kategorisi (%8): kağıt-beyazı zeminde stilize özne
-(halftone/posterize/mürekkep) + eskitilmiş display yazı + duman/ışıma efektleri.
-Pay, hedefleri çoktan tutturulmuş kategorilerden kırpıldı: camo .12->.10
-(0.0249, en yakın rakibin 2.3 katı önde), hair .12->.10, text .07->.06 (0.0112,
-ticari referans geçildi), illustration .07->.06 (0.0089, herkesin önünde),
-general .04->.02. transparent (.22 — Ideogram 0.0343 hedefi hâlâ açık) ve
-complex/thin/fx DEĞİŞMEDİ."""
+"""v7 target (sums to EXACTLY 100%) — new synthetic `design` category (8%) for
+issue #2 (the print-design/sticker style gap): stylized subjects on paper-white
+backgrounds (halftone/posterize/ink) + distressed display text + smoke/glow
+effects. The share was carved out of categories whose targets were already
+comfortably met: camo .12->.10 (0.0249, 2.3x ahead of the closest competitor),
+hair .12->.10, text .07->.06 (0.0112, commercial reference beaten),
+illustration .07->.06 (0.0089, ahead of everyone), general .04->.02.
+transparent (.22 — the Ideogram 0.0343 target is still open) and
+complex/thin/fx UNCHANGED."""
 
 SAMPLER_PRESETS: dict[str, dict[str, float]] = {
     "v1": SAMPLER_PRESET_V1,
@@ -227,38 +236,40 @@ SAMPLER_PRESETS: dict[str, dict[str, float]] = {
     "v5": SAMPLER_PRESET_V5,
     "v7": SAMPLER_PRESET_V7,
 }
-"""Notebook `SAMPLER_PRESET` parametresinin ("v1"/"v2"/"v3"/"v4") çözümlendiği
-tablo — bkz. `training/train_colab.ipynb` parametre hücresi ve hücre (e)."""
+"""The table the notebook's `SAMPLER_PRESET` parameter ("v1"/"v2"/"v3"/"v4")
+is resolved against — see the `training/train_colab.ipynb` parameters cell and
+cell (e)."""
 
 
 def resolve_sampler_num_samples(dataset_len: int, num_samples: int | None = None) -> int:
-    """`WeightedRandomSampler(weights, num_samples=...)`'a verilecek değeri çözer
-    (torch'a bağımlı olmadan test edilebilmesi için sampler NESNESİ değil, yalnız
-    bu SAYIYI hesaplayan saf fonksiyon — bkz. modül başı docstring "torch/PIL
-    içe aktarmaz" ilkesi).
+    """Resolves the value passed to `WeightedRandomSampler(weights,
+    num_samples=...)` (a pure function that computes only this NUMBER, not the
+    sampler OBJECT, so it stays testable without depending on torch — see the
+    module-level docstring's "does not import torch/PIL" principle).
 
-    `num_samples=None` (varsayılan): v1/v2 davranışıyla BİREBİR aynı —
-    `dataset_len` (o anki `len(train_dataset)`) döner, yani epoch uzunluğu veri
-    setiyle birlikte büyür/küçülür.
+    `num_samples=None` (default): IDENTICAL to the v1/v2 behavior —
+    returns `dataset_len` (the current `len(train_dataset)`), i.e. the epoch
+    length grows/shrinks with the dataset.
 
-    `num_samples` verilirse (v3): epoch uzunluğu veri setinin gerçek boyutundan
-    BAĞIMSIZ, SABİT bu değere kilitlenir. v3'te veri setine `scripts/
-    make_composites.py`'nin `_o00` kopyalarıyla ~14k yeni çift eklendiğinde
-    (bkz. o dosyanın v3 notu), `num_samples=None` bırakılsaydı epoch başına
-    iterasyon sayısı (ve dolayısıyla Colab birim maliyeti) da otomatik büyürdü;
-    notebook bunun yerine `EPOCH_NUM_SAMPLES=27715` (v2'nin epoch büyüklüğüyle
-    PARİTE) geçer — epoch maliyeti ~48 birimde sabit kalır. `WeightedRandomSampler`
-    zaten `replacement=True` ile çalıştığından `num_samples < dataset_len` veri
-    KAYBI değildir — yalnızca epoch'un ne kadar örnek çektiğini kısaltır, yeni
-    eklenen `_o00` örnekleri sampler ağırlıkları üzerinden (kategori paylarına
-    göre) yine olasılıksal olarak seçilebilir kalır.
+    If `num_samples` is given (v3): the epoch length is locked to this FIXED
+    value, INDEPENDENT of the dataset's real size. In v3, when ~14k new pairs
+    were added to the dataset via `scripts/make_composites.py`'s `_o00` copies
+    (see that file's v3 note), leaving `num_samples=None` would have let the
+    per-epoch iteration count (and hence the Colab unit cost) grow
+    automatically; instead the notebook passes `EPOCH_NUM_SAMPLES=27715`
+    (PARITY with v2's epoch size) — the epoch cost stays fixed at ~48 units.
+    Since `WeightedRandomSampler` already runs with `replacement=True`,
+    `num_samples < dataset_len` is NOT data loss — it only shortens how many
+    samples the epoch draws; the newly added `_o00` samples remain
+    probabilistically selectable through the sampler weights (according to the
+    category shares).
 
-    `num_samples <= 0` -> `ValueError` (WeightedRandomSampler'ın kendisi de bunu
-    reddeder, ama net bir mesajla erken yakalanır)."""
+    `num_samples <= 0` -> `ValueError` (WeightedRandomSampler itself rejects
+    this too, but it is caught early with a clear message)."""
     if num_samples is None:
         return dataset_len
     if num_samples <= 0:
-        raise ValueError(f"num_samples > 0 olmalı: {num_samples}")
+        raise ValueError(f"num_samples must be > 0: {num_samples}")
     return num_samples
 
 
@@ -268,33 +279,37 @@ def compute_sample_weights(
     target_share: dict[str, float] | None = None,
     default_category: str = "_other",
 ) -> list[float]:
-    """`stems` (MyData.image_paths ile AYNI SIRADA olmalı — WeightedRandomSampler
-    ağırlıkları dataset indeksleriyle hizalanmak zorunda) için, `target_share`'de
-    adı geçen kategorilerin epoch-içi BEKLENEN payını `target_share`'e sabitleyen,
-    geri kalan kategorilerin KENDİ ARALARINDAKİ göreli oranını (ham sayılarıyla
-    orantılı) koruyan ağırlıklar üretir.
+    """For `stems` (which MUST be in the SAME ORDER as MyData.image_paths —
+    WeightedRandomSampler weights have to align with dataset indices), produces
+    weights that pin the EXPECTED in-epoch share of every category named in
+    `target_share` to `target_share`, while preserving the relative proportions
+    of the remaining categories AMONG THEMSELVES (proportional to their raw
+    counts).
 
-    `target_share=None` (varsayılan) ise `SAMPLER_PRESET_V1` kullanılır — v1
-    fine-tune koşusunun (epoch_1.pth) davranışıyla BİREBİR aynı (geriye dönük
-    uyumluluk: mevcut çağıranlar hiçbir şey değiştirmeden aynı sonucu almaya
-    devam eder). v2 rebalancing için `SAMPLER_PRESET_V2` (veya
-    `SAMPLER_PRESETS["v2"]`) açıkça geçilmeli — bkz. modül başı `SAMPLER_PRESETS`
-    ve v2-hazırlik raporu (v1'de transparent+camouflage payı birleşik >%50'ye
-    çıkıp complex/thin/hair'de "catastrophic forgetting"e yol açmıştı).
+    If `target_share=None` (default), `SAMPLER_PRESET_V1` is used — IDENTICAL
+    to the behavior of the v1 fine-tune run (epoch_1.pth) (backward
+    compatibility: existing callers keep getting the same result without
+    changing anything). For v2 rebalancing, `SAMPLER_PRESET_V2` (or
+    `SAMPLER_PRESETS["v2"]`) must be passed explicitly — see the module-level
+    `SAMPLER_PRESETS` and the v2 preparation report (in v1 the combined
+    transparent+camouflage share climbed above 50% and caused "catastrophic
+    forgetting" in complex/thin/hair).
 
-    Algoritma: hedefi olan bir kategori c için örnek başına ağırlık =
-    target_share[c] / count(c) (kategori toplamda tam olarak target_share[c]
-    payını alır, kategori-içi örnekler eşit ağırlıklı). Hedefsiz kategoriler için
-    örnek başına ağırlık = (1 - sum(target_share)) / toplam_hedefsiz_sayı — TÜM
-    hedefsiz örnekler için AYNI sabit değer, bu da onların birbirlerine göre
-    payının (ağırlıksız haldeki gibi) ham sayılarıyla orantılı kalmasını sağlar.
+    Algorithm: for a targeted category c, per-sample weight =
+    target_share[c] / count(c) (the category as a whole takes exactly the
+    target_share[c] share; samples within the category are weighted equally).
+    For untargeted categories, per-sample weight =
+    (1 - sum(target_share)) / total_untargeted_count — the SAME constant value
+    for ALL untargeted samples, which keeps their share relative to each other
+    proportional to raw counts (as in the unweighted case).
 
-    Bu, fiziksel oversampling'e (kompozit dosyalarını fazladan üretmek) göre EN AZ
-    MÜDAHALECİ mekanizma: `scripts/make_composites.py`'nin `CATEGORY_MULTIPLIER`
-    çarpanlarına (transparent×10, camouflage×2 — bkz. o dosyanın docstring'i)
-    dokunmadan, yalnız `DataLoader`'ın sampler'ını değiştirerek çalışır; resmi
-    `train.py`nin `prepare_dataloader`'ı (`shuffle=is_train, sampler=None`)
-    üzerine YALNIZ bir `sampler=` argümanı eklenir (bkz. notebook eğitim hücresi).
+    This is the LEAST INVASIVE mechanism compared to physical oversampling
+    (producing extra composite files): it works without touching
+    `scripts/make_composites.py`'s `CATEGORY_MULTIPLIER` factors
+    (transparent x10, camouflage x2 — see that file's docstring), changing only
+    the `DataLoader`'s sampler; ONLY a `sampler=` argument is added on top of
+    the official `train.py`'s `prepare_dataloader`
+    (`shuffle=is_train, sampler=None`) (see the notebook training cell).
     """
     if target_share is None:
         target_share = SAMPLER_PRESET_V1
@@ -303,9 +318,9 @@ def compute_sample_weights(
 
     targeted = {c: share for c, share in target_share.items() if counts.get(c, 0) > 0}
     sum_targeted = sum(targeted.values())
-    if sum_targeted > 1.0 + 1e-9:  # tam 1.0'a İZİN VAR (bkz. SAMPLER_PRESET_V2); epsilon fp toplama gürültüsü için
-        raise ValueError(f"target_share toplamı > 1.0 olamaz (mevcut kategorilerde): {targeted}")
-    remaining_mass = max(0.0, 1.0 - sum_targeted)  # sum==1.0 -> hedefsiz (_other) örneklere 0 ağırlık (hiç örneklenmezler)
+    if sum_targeted > 1.0 + 1e-9:  # exactly 1.0 IS allowed (see SAMPLER_PRESET_V2); epsilon for fp summation noise
+        raise ValueError(f"target_share sum cannot exceed 1.0 (over present categories): {targeted}")
+    remaining_mass = max(0.0, 1.0 - sum_targeted)  # sum==1.0 -> untargeted (_other) samples get 0 weight (never sampled)
 
     other_categories = [c for c in counts if c not in targeted]
     n_other_total = sum(counts[c] for c in other_categories)
@@ -323,10 +338,10 @@ def compute_sample_weights(
 def compute_expected_shares(
     weights: list[float], stems: list[str], stem_category: dict[str, str], default_category: str = "_other"
 ) -> dict[str, float]:
-    """Tanılama: verilen ağırlıklarla (normalize edilmemiş de olsa) her kategorinin
-    epoch-içi BEKLENEN örnekleme payını hesaplar (`sum(weights in cat) / sum(all weights)`).
-    Notebook bu fonksiyonu, sampler kurulduktan hemen sonra hedefin (≥%20) gerçekten
-    tutturulduğunu konsola yazdırmak için çağırır."""
+    """Diagnostics: computes each category's EXPECTED in-epoch sampling share
+    (`sum(weights in cat) / sum(all weights)`) with the given weights (even if
+    unnormalized). The notebook calls this right after building the sampler to
+    print to the console that the target (>=20%) was really met."""
     total = sum(weights)
     if total <= 0:
         return {}
@@ -338,12 +353,13 @@ def compute_expected_shares(
 
 
 # ============================================================================
-# 2) Checkpoint keşfi / budama (resume + Drive disk kotası)
+# 2) Checkpoint discovery / pruning (resume + Drive disk quota)
 # ============================================================================
 def find_latest_checkpoint(ckpt_dir: str | Path, pattern: re.Pattern = CKPT_FILENAME_RE) -> tuple[str, int] | None:
-    """`ckpt_dir` altında `epoch_<N>.pth` desenine uyan dosyaları tarar, en büyük
-    N'e sahip olanı `(yol, epoch)` olarak döndürür; hiç yoksa `None` (ilk koşu —
-    `BiRefNet.from_pretrained(HF_MODEL_ID)` ile sıfırdan başlanır)."""
+    """Scans `ckpt_dir` for files matching the `epoch_<N>.pth` pattern and
+    returns the one with the largest N as `(path, epoch)`; if there is none,
+    returns `None` (first run — start from scratch with
+    `BiRefNet.from_pretrained(HF_MODEL_ID)`)."""
     ckpt_dir = Path(ckpt_dir)
     if not ckpt_dir.is_dir():
         return None
@@ -361,10 +377,11 @@ def find_latest_checkpoint(ckpt_dir: str | Path, pattern: re.Pattern = CKPT_FILE
 def prune_old_checkpoints(
     ckpt_dir: str | Path, keep_last_n: int, pattern: re.Pattern = CKPT_FILENAME_RE
 ) -> list[str]:
-    """`ckpt_dir`'de yalnız en son `keep_last_n` epoch'un checkpoint'ini bırakır,
-    gerisini SİLER; silinen dosya yollarını döndürür. Hem lokal Colab diskinde hem
-    de Drive'da çağrılır (100 epoch × ~güncel BiRefNet checkpoint boyutu Drive
-    kotasını hızla doldurur — bkz. notebook parametre hücresi `KEEP_LAST_N_CHECKPOINTS`)."""
+    """Keeps only the checkpoints of the last `keep_last_n` epochs in
+    `ckpt_dir` and DELETES the rest; returns the deleted file paths. Called
+    both on the local Colab disk and on Drive (100 epochs x ~the current
+    BiRefNet checkpoint size fills the Drive quota quickly — see the notebook
+    parameters cell `KEEP_LAST_N_CHECKPOINTS`)."""
     ckpt_dir = Path(ckpt_dir)
     if not ckpt_dir.is_dir():
         return []
@@ -382,15 +399,15 @@ def prune_old_checkpoints(
 
 
 # ============================================================================
-# 3) Deterministik TRAIN/VAL bölünmesi + sabit hızlı-değerlendirme alt kümesi
+# 3) Deterministic TRAIN/VAL split + fixed quick-evaluation subset
 # ============================================================================
 def deterministic_val_split(all_stems: list[str], seed: int, val_fraction: float) -> tuple[list[str], list[str]]:
-    """`all_stems`'i (girdi sırası ÖNEMSİZ — önce sıralanır, sonra tohumlu
-    karıştırılır, böylece dosya sistemi listeleme sırasından bağımsız aynı sonuç
-    üretir) deterministik olarak (train_stems, val_stems) ikilisine böler.
-    Yeniden koşularda (idempotentlik, görev madde 6) AYNI val kümesini üretir —
-    fiziksel taşıma YOK, yalnız notebook bu listeye göre hangi dosyaları
-    TRAIN/ vs VAL/ alt dizinine kopyalayacağına karar verir."""
+    """Deterministically splits `all_stems` (input order IRRELEVANT — it is
+    sorted first, then shuffled with a seed, so the same result is produced
+    regardless of filesystem listing order) into a (train_stems, val_stems)
+    pair. Produces the SAME val set on re-runs (idempotency, task item 6) —
+    there is NO physical moving of files; the notebook merely uses this list to
+    decide which files to copy into the TRAIN/ vs VAL/ subdirectory."""
     import random
 
     stems_sorted = sorted(all_stems)
@@ -406,21 +423,23 @@ def deterministic_val_split(all_stems: list[str], seed: int, val_fraction: float
 def load_or_create_val_split(
     all_stems: list[str], seed: int, val_fraction: float, persist_path: str | Path
 ) -> tuple[list[str], list[str]]:
-    """`deterministic_val_split`'in KALICI hali: ilk koşuda bölünmeyi yapıp
-    val listesini `persist_path`'e (JSON) yazar; sonraki koşularda dosyadan okur.
+    """The PERSISTENT version of `deterministic_val_split`: on the first run it
+    performs the split and writes the val list to `persist_path` (JSON); on
+    subsequent runs it reads it from the file.
 
-    Neden gerekli: Drive'daki veri seti sonradan BÜYÜYEBİLİR (Faz 2 pipeline'ı
-    idempotent — yeni bir koşu yeni çiftler ekleyebilir). Salt-deterministik
-    bölünme, girdi listesi değişince FARKLI bir val kümesi üretirdi — önceki
-    epoch'larda eğitimde görülmüş görseller val'e sızardı. Kalıcı listeyle val
-    kümesi İLK koşuda ne seçildiyse o kalır; SONRADAN eklenen stem'lerin TAMAMI
-    TRAIN'e gider (bilinçli, basit tercih: val kümesinin epoch'lar arası
-    karşılaştırılabilirliği, oransal val büyütmekten daha değerli — val payı
-    zamanla %2'nin biraz altına düşebilir, hızlı-değerlendirme zaten sabit
-    `n=24`'lük bir alt küme kullandığı için pratik etkisi yok).
+    Why it is needed: the dataset on Drive can GROW later (the Phase 2 pipeline
+    is idempotent — a new run may add new pairs). A purely deterministic split
+    would produce a DIFFERENT val set once the input list changed — images seen
+    in training during earlier epochs would leak into val. With the persisted
+    list, the val set stays whatever was chosen on the FIRST run; ALL stems
+    added LATER go to TRAIN (a deliberate, simple choice: cross-epoch
+    comparability of the val set is worth more than growing val
+    proportionally — the val share may drift slightly below 2% over time, with
+    no practical impact since the quick evaluation already uses a fixed `n=24`
+    subset).
 
-    Dosyada kayıtlı olup artık diskte OLMAYAN stem'ler sessizce val'den düşürülür
-    (veri silinmişse bölünme yine tutarlı kalır)."""
+    Stems recorded in the file that NO LONGER exist on disk are silently
+    dropped from val (if data was deleted, the split still stays consistent)."""
     persist_path = Path(persist_path)
     if persist_path.exists():
         saved = json.loads(persist_path.read_text())
@@ -439,11 +458,11 @@ def load_or_create_val_split(
 
 
 def fixed_eval_subset(val_stems: list[str], seed: int, n: int) -> list[str]:
-    """VAL kümesinden (2% — yüzlerce görsel olabilir) HER epoch aynı, sabit
-    `n` (varsayılan 24) görsellik bir alt küme seçer — periyodik hızlı-değerlendirmenin
-    epoch'lar arasında karşılaştırılabilir olması için (her seferinde farklı
-    rastgele görsellerle ölçülen MAE'nin gürültüsü epoch-to-epoch trendini
-    gizleyebilir)."""
+    """Selects from the VAL set (2% — can be hundreds of images) a fixed subset
+    of `n` (default 24) images that is the SAME every epoch — so that the
+    periodic quick evaluation is comparable across epochs (MAE measured on
+    different random images each time would let noise hide the epoch-to-epoch
+    trend)."""
     import random
 
     stems_sorted = sorted(val_stems)
@@ -454,27 +473,32 @@ def fixed_eval_subset(val_stems: list[str], seed: int, n: int) -> list[str]:
 
 
 # ============================================================================
-# 4) BiRefNet resmi train.py/config.py mantığının küçük parçaları
+# 4) Small pieces of the official BiRefNet train.py/config.py logic
 # ============================================================================
 def should_apply_finetune_reweight(epoch: int, total_epochs: int, finetune_last_epochs: int) -> bool:
-    """BiRefNet resmi `train.py::Trainer.train_epoch` içindeki koşul:
-    `if epoch > args.epochs + config.finetune_last_epochs:` (kaynak:
-    ZhengPeng7/BiRefNet `train.py`, GitHub `main` dalı, fonksiyon `train_epoch`,
-    ~satır 195 civarı — bu depoya `curl` ile çekilip incelendi, bkz. Faz 3 raporu).
-    `finetune_last_epochs` NEGATİF bir sayıdır (`config.py`'de `Matting` görevi
-    için `-10` — son 10 epoch'ta pixel loss ağırlıkları kademeli değiştirilir,
-    "belgelenen fine-tune hilesi"). `total_epochs`, o Colab OTURUMUNUN DEĞİL,
-    eğitimin NİHAİ HEDEF epoch sayısıdır (`EPOCHS` parametresi — resume'lerde
-    HER OTURUMDA AYNI değer verilmeli, aksi halde bu eşik oturumdan oturuma kayar).
+    """The condition inside the official BiRefNet `train.py::Trainer.train_epoch`:
+    `if epoch > args.epochs + config.finetune_last_epochs:` (source:
+    ZhengPeng7/BiRefNet `train.py`, GitHub `main` branch, function
+    `train_epoch`, around line ~195 — fetched into this repo with `curl` and
+    reviewed, see the Phase 3 report). `finetune_last_epochs` is a NEGATIVE
+    number (`-10` for the `Matting` task in `config.py` — during the last 10
+    epochs the pixel loss weights are changed gradually, the "documented
+    fine-tune trick"). `total_epochs` is the FINAL TARGET epoch count of the
+    training, NOT of that Colab SESSION (the `EPOCHS` parameter — on resumes
+    the SAME value must be passed in EVERY SESSION, otherwise this threshold
+    drifts from session to session).
 
-    Resmi koşula EK iki koruma (kısa koşular için — resmi kod EPOCHS>=150
-    varsaydığından bu durumu hiç ele almıyor):
-    - `finetune_last_epochs == 0` -> hep False (`config.py` yorumu: "choose 0 to skip").
-    - `total_epochs <= |finetune_last_epochs|` (ör. EPOCHS=6, ft=-10) -> hep False:
-      pencere başlangıcı (total+ft+1) epoch 1'in ÖNCESİNE düşerdi ve decay üssü
-      daha ilk epoch'ta n>1 olurdu (ör. 0.9^5) — kısa keşif koşularında loss
-      ağırlıklarını daha eğitim başlamadan bozmak anlamsız, hile tamamen atlanır.
-      Bu koruma sayesinde hile uygulandığında üs her zaman n>=1'den başlar
+    Two guards ADDED on top of the official condition (for short runs — the
+    official code assumed EPOCHS>=150 and never handled this case):
+    - `finetune_last_epochs == 0` -> always False (`config.py` comment:
+      "choose 0 to skip").
+    - `total_epochs <= |finetune_last_epochs|` (e.g. EPOCHS=6, ft=-10) ->
+      always False: the window start (total+ft+1) would fall BEFORE epoch 1
+      and the decay exponent would already be n>1 at the very first epoch
+      (e.g. 0.9^5) — corrupting the loss weights before training even starts
+      makes no sense in short exploratory runs, so the trick is skipped
+      entirely. Thanks to this guard, whenever the trick IS applied the
+      exponent always starts from n>=1
       (epoch > total+ft >= 1 -> n = epoch-(total+ft) >= 1)."""
     if finetune_last_epochs == 0:
         return False
@@ -484,18 +508,19 @@ def should_apply_finetune_reweight(epoch: int, total_epochs: int, finetune_last_
 
 
 def effective_lr(task: str, batch_size: int, accum_steps: int, base_lr_override: float | None = None) -> float:
-    """BiRefNet resmi `config.py`'deki formülün ADAPTE edilmiş hali:
+    """An ADAPTED version of the formula in the official BiRefNet `config.py`:
     `self.lr = (1e-4 if 'DIS5K' in self.task else 1e-5) * math.sqrt(self.batch_size / 4)`
-    (kaynak: `config.py`, GitHub `main`, `Config.__init__`). Resmi kodda gradient
-    accumulation YOK (`train.py`'de `accelerator.gradient_accumulation_steps=1`
-    SABİT kodlanmış, `accelerator.accumulate(...)` context'i YORUM SATIRINDA
-    bırakılmış — kullanılmıyor); bu notebook gradient accumulation EKLEDİĞİ için
-    formüldeki `batch_size`'ı, optimizer adımı başına GERÇEK (efektif) batch'e
-    (`batch_size * accum_steps`) genişletiyoruz — resmi formülün "efektif batch
-    büyüdükçe lr'yi karekök oranında büyüt" mantığını, artık iki eksende (fiziksel
-    batch + accumulation) büyüyen efektif batch'e doğru şekilde uygulamak için.
-    `base_lr_override` doluysa (parametre hücresinde `LR` elle ayarlanmışsa) bu
-    hesap tamamen atlanır."""
+    (source: `config.py`, GitHub `main`, `Config.__init__`). The official code
+    has NO gradient accumulation (`train.py` HARD-CODES
+    `accelerator.gradient_accumulation_steps=1`, and the
+    `accelerator.accumulate(...)` context is left COMMENTED OUT — unused);
+    since this notebook ADDS gradient accumulation, we widen the `batch_size`
+    in the formula to the REAL (effective) batch per optimizer step
+    (`batch_size * accum_steps`) — to correctly apply the official formula's
+    "grow lr with the square root of the effective batch" logic to an
+    effective batch that now grows along two axes (physical batch +
+    accumulation). If `base_lr_override` is set (`LR` manually configured in
+    the parameters cell), this computation is skipped entirely."""
     if base_lr_override is not None:
         return float(base_lr_override)
     base = 1e-4 if "DIS5K" in task else 1e-5
@@ -504,7 +529,7 @@ def effective_lr(task: str, batch_size: int, accum_steps: int, base_lr_override:
 
 
 # ============================================================================
-# 5) BiRefNet config.py metin yaması (İDEMPOTENT)
+# 5) BiRefNet config.py text patching (IDEMPOTENT)
 # ============================================================================
 _TASK_LIST = ["DIS5K", "COD", "HRSOD", "General", "General-2K", "Matting"]
 _TASK_LINE_RE = re.compile(
@@ -515,39 +540,41 @@ _BS_LINE_RE = re.compile(r"self\.batch_size = \d+")
 
 
 def apply_config_patches(src: str, task: str, sys_home_dir: str, batch_size: int) -> str:
-    """BiRefNet `config.py` kaynağına üç yamayı uygular: (1) `self.task` seçili
-    indeksi, (2) `self.sys_home_dir` ikinci elemanı (data_root_dir'ın kökü),
-    (3) `self.batch_size`. Satır desenleri GitHub `main` dalındaki `Config.__init__`
-    ile doğrulandı (bkz. Faz 3 raporu).
+    """Applies three patches to the BiRefNet `config.py` source: (1) the
+    selected `self.task` index, (2) the second element of `self.sys_home_dir`
+    (the root of data_root_dir), (3) `self.batch_size`. The line patterns were
+    verified against `Config.__init__` on the GitHub `main` branch (see the
+    Phase 3 report).
 
-    İDEMPOTENT ve yeniden-parametrelenebilir: regex, satırın HEM orijinal
-    (yamasız) HEM önceden yamalanmış halini eşler — aynı VM'de notebook'un
-    (aynı ya da FARKLI parametre değerleriyle) yeniden koşturulması hata vermez,
-    `apply(apply(src)) == apply(src)`. Desen hiç eşleşmezse (repo `main` dalı
-    değişmişse) SESSİZCE geçmek yerine net bir ValueError fırlatılır."""
+    IDEMPOTENT and re-parameterizable: the regexes match the line BOTH in its
+    original (unpatched) AND in its previously patched form — re-running the
+    notebook on the same VM (with the same or DIFFERENT parameter values) does
+    not fail, `apply(apply(src)) == apply(src)`. If a pattern does not match
+    at all (the repo `main` branch has changed), a clear ValueError is raised
+    instead of passing SILENTLY."""
     if task not in _TASK_LIST:
-        raise ValueError(f"bilinmeyen görev: {task!r} (geçerli: {_TASK_LIST})")
+        raise ValueError(f"unknown task: {task!r} (valid: {_TASK_LIST})")
     idx = _TASK_LIST.index(task)
 
     patched, n = _TASK_LINE_RE.subn(rf"self.task = \1[{idx}]", src, count=1)
     if n == 0:
         raise ValueError(
-            "config.py'de beklenen `self.task = [...][N]` satırı bulunamadı — "
-            "BiRefNet main dalı değişmiş olabilir, config.py'yi elle kontrol edin."
+            "expected `self.task = [...][N]` line not found in config.py — "
+            "the BiRefNet main branch may have changed; inspect config.py manually."
         )
     patched, n = _HOME_LINE_RE.subn(
         f"self.sys_home_dir = [os.path.expanduser('~'), '{sys_home_dir}'][1]", patched, count=1
     )
     if n == 0:
-        raise ValueError("config.py'de beklenen `self.sys_home_dir = [...]` satırı bulunamadı.")
+        raise ValueError("expected `self.sys_home_dir = [...]` line not found in config.py.")
     patched, n = _BS_LINE_RE.subn(f"self.batch_size = {batch_size}", patched, count=1)
     if n == 0:
-        raise ValueError("config.py'de beklenen `self.batch_size = N` satırı bulunamadı.")
+        raise ValueError("expected `self.batch_size = N` line not found in config.py.")
     return patched
 
 
 # ============================================================================
-# 6) Drive -> yerel disk veri kopyalama (boyut doğrulamalı, idempotent)
+# 6) Drive -> local disk data copying (size-validated, idempotent)
 # ============================================================================
 def copy_pairs(
     stems: list[str],
@@ -559,24 +586,25 @@ def copy_pairs(
     gt_ext: str = ".png",
     max_workers: int = 16,
 ) -> int:
-    """`stems` listesindeki (im, gt) çiftlerini kaynaktan hedefe kopyalar;
-    kopyalanan çift sayısını döndürür. İdempotent: hedefte HEM im HEM gt varsa
-    VE her ikisinin de dosya boyutu kaynakla birebir eşleşiyorsa atlanır —
-    yalnız im boyutuna bakmak yetmez, yarım kalmış bir Colab kopyalamasında
-    gt dosyası kesik (truncated) kalmış olabilir; o durumda çift YENİDEN
-    kopyalanır (onarım).
+    """Copies the (im, gt) pairs in `stems` from source to destination;
+    returns the number of pairs copied. Idempotent: a pair is skipped only if
+    BOTH im AND gt exist at the destination AND both file sizes exactly match
+    the source — checking only the im size is not enough, since in a
+    half-finished Colab copy the gt file may have been left truncated; in that
+    case the pair is copied AGAIN (repair).
 
-    Drive FUSE bağlantısı üzerinden onbinlerce küçük dosyayı TEK İŞ PARÇACIĞIYLA
-    kopyalamak saatler sürüyor (canlı bir Colab oturumunda ölçüldü); bu yüzden
-    her çift bağımsız bir iş birimi olarak `ThreadPoolExecutor` ile `max_workers`
-    kadar iş parçacığına dağıtılır (I/O-bound kopyalama — GIL burada engel
-    değil). Her çiftin hedef dosyaları kendine özgü olduğundan iş parçacıkları
-    arasında paylaşılan durum YOK (yarış koşulu riski yok); sonuç (kopyalanan
-    sayı, atlanan/onarılan çiftler) sıralamadan BAĞIMSIZ, seri koşumla birebir
-    aynıdır. Tek tek çiftlerdeki hatalar ANINDA fırlatılmaz — TÜMÜ toplanır,
-    geri kalan tüm çiftler işlenir (kısmi ilerleme kaybolmaz), sonda İLK hata
-    toplam hata sayısıyla birlikte yeniden fırlatılır. Her 2000 tamamlanan
-    çiftte bir ilerleme (hız + ETA) konsola yazdırılır."""
+    Copying tens of thousands of small files over the Drive FUSE mount with a
+    SINGLE THREAD takes hours (measured in a live Colab session); therefore
+    each pair is an independent unit of work distributed over `max_workers`
+    threads via `ThreadPoolExecutor` (I/O-bound copying — the GIL is not a
+    bottleneck here). Since each pair's destination files are unique to it,
+    there is NO shared state between threads (no race-condition risk); the
+    result (copied count, skipped/repaired pairs) is ORDER-INDEPENDENT and
+    identical to a serial run. Errors in individual pairs are NOT raised
+    immediately — ALL of them are collected, all remaining pairs are processed
+    (partial progress is not lost), and at the end the FIRST error is re-raised
+    together with the total error count. Progress (rate + ETA) is printed to
+    the console every 2000 completed pairs."""
     import shutil
     import time
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -612,69 +640,70 @@ def copy_pairs(
             try:
                 if future.result():
                     copied += 1
-            except Exception as exc:  # per-item hata: topla, işlemeye devam et
+            except Exception as exc:  # per-item error: collect, keep processing
                 errors.append((stem, exc))
             if completed % 2000 == 0:
                 elapsed = time.time() - t0
                 rate = completed / elapsed if elapsed > 0 else 0.0
                 eta = (total - completed) / rate if rate > 0 else float("inf")
                 print(
-                    f"copy_pairs: {completed}/{total} tamamlandı "
-                    f"({rate:.1f} çift/sn, ETA {eta:.0f}sn)"
+                    f"copy_pairs: {completed}/{total} done "
+                    f"({rate:.1f} pairs/s, ETA {eta:.0f}s)"
                 )
 
     if errors:
         first_stem, first_exc = errors[0]
         raise RuntimeError(
-            f"copy_pairs: {len(errors)}/{total} çift kopyalanamadı "
-            f"(ilk hata, stem={first_stem!r}: {first_exc!r})"
+            f"copy_pairs: {len(errors)}/{total} pairs failed to copy "
+            f"(first error, stem={first_stem!r}: {first_exc!r})"
         ) from first_exc
 
     return copied
 
 
 # ============================================================================
-# 7) v3 — VAL sızıntı hariç tutma + kompozit manifest merge
+# 7) v3 — VAL leak exclusion + composite manifest merge
 # ============================================================================
 _COMPOSITE_COPY_SUFFIX_RE = re.compile(r"_[vo]\d{2}$")
 
 
 def strip_composite_copy_suffix(stem: str) -> str:
-    """`<kaynak_id>_v<NN>` veya `<kaynak_id>_o<NN>` -> `<kaynak_id>` (bkz.
-    `scripts/make_composites.py` isimlendirme sözleşmesi: `_v<NN>` compose'lu
-    kopyalar, `_o<NN>` orijinal-arka-plan kopyaları). Eşleşme yoksa (beklenmeyen
-    bir stem) `stem` OLDUĞU GİBİ döner.
+    """`<source_id>_v<NN>` or `<source_id>_o<NN>` -> `<source_id>` (see the
+    `scripts/make_composites.py` naming contract: `_v<NN>` composited copies,
+    `_o<NN>` original-background copies). If there is no match (an unexpected
+    stem), `stem` is returned AS IS.
 
-    DİKKAT — eşleşmeme SIZINTI RİSKİDİR, zararsız değil: eşleşmeyen bir VAL
-    stem'i hariç-tutma kümesine SON EKLİ (yanlış) haliyle girer; bu string
-    kaynak manifest'teki hiçbir `id` ile eşleşmez, dolayısıyla ASIL kaynak id
-    hariç tutulMAZ ve o kaynağın `_o00` kopyası eğitim setine ÜRETİLİR — koruma
-    o kaynak için fiilen BAYPAS edilmiş olur (aynı görsel hem TRAIN'de `_o00`
-    olarak hem VAL'de başka bir kopyasıyla görülür). Bu yüzden çağıranlar
-    eşleşmeyen stem'leri MUTLAKA teşhis etmeli — `derive_val_excluded_source_
-    ids` bunları ayrıca döndürür ve `training/v3_veri_guncelleme_hucresi.py`
-    boş-olmayan bir eşleşmeme listesinde yüksek sesli uyarı basar."""
+    CAUTION — a non-match is a LEAK RISK, not harmless: a non-matching VAL
+    stem enters the exclusion set in its SUFFIXED (wrong) form; that string
+    matches no `id` in the source manifest, so the REAL source id is NOT
+    excluded and an `_o00` copy of that source IS generated into the training
+    set — the guard is effectively BYPASSED for that source (the same image is
+    seen both in TRAIN as `_o00` and in VAL through another copy). Callers
+    must therefore ALWAYS diagnose non-matching stems —
+    `derive_val_excluded_source_ids` returns them separately, and
+    `training/v3_veri_guncelleme_hucresi.py` prints a loud warning on a
+    non-empty mismatch list."""
     return _COMPOSITE_COPY_SUFFIX_RE.sub("", stem)
 
 
 def derive_val_excluded_source_ids(val_stems: list[str]) -> tuple[set[str], list[str]]:
-    """VAL kümesindeki (kompozit) stem'lerden KAYNAK satır id'lerini türetir —
-    bu id'ler `scripts/make_composites.py`'nin `_o00` üretiminden hariç
-    tutulmalı (VAL sızıntı koruması): VAL_HOLDOUT zaten belirli `_v<NN>`/`_o<NN>`
-    kopyalarını içeriyor olsa da, AYNI kaynak görsele ait BAŞKA bir `_o00`
-    kopyasını eğitim setine eklemek, o görselin (farklı bir varyantla da olsa)
-    hem TRAIN hem VAL'de görülmesi anlamına gelir — model o KAYNAK görseli
-    ezberleyebilir. `training.train_colab_lib.load_or_create_val_split`in
-    yazdığı `val_stems.json`daki `"val_stems"` listesi doğrudan bu fonksiyona
-    verilir (bkz. `training/v3_veri_guncelleme_hucresi.py`).
+    """Derives the SOURCE row ids from the (composite) stems in the VAL set —
+    these ids must be excluded from `scripts/make_composites.py`'s `_o00`
+    generation (VAL leak guard): even though VAL_HOLDOUT already contains
+    specific `_v<NN>`/`_o<NN>` copies, adding ANOTHER `_o00` copy of the SAME
+    source image to the training set would mean that image is seen (even if
+    via a different variant) in both TRAIN and VAL — the model could memorize
+    that SOURCE image. The `"val_stems"` list in the `val_stems.json` written
+    by `training.train_colab_lib.load_or_create_val_split` is fed directly
+    into this function (see `training/v3_veri_guncelleme_hucresi.py`).
 
-    Dönüş: `(excluded_source_ids, unmatched_stems)`. `unmatched_stems`, son ek
-    deseniyle (`_[vo]\\d{2}$`) EŞLEŞMEYEN val stem'leri — bunlar hariç-tutma
-    kümesine olduğu gibi (son ekli/yanlış biçimde) girdiğinden kaynak
-    manifest'teki hiçbir id ile eşleşmez ve koruma o kaynaklar için fiilen
-    BAYPAS edilir (ayrıntı: `strip_composite_copy_suffix` docstring'i).
-    Çağıran, `unmatched_stems` boş değilse bunu YÜKSEK SESLE raporlamalı
-    (bkz. v3 hücresindeki `stage_composites_o` uyarısı)."""
+    Returns: `(excluded_source_ids, unmatched_stems)`. `unmatched_stems` are
+    the val stems that do NOT match the suffix pattern (`_[vo]\\d{2}$`) —
+    since they enter the exclusion set as-is (suffixed/wrong form), they match
+    no id in the source manifest and the guard is effectively BYPASSED for
+    those sources (details: the `strip_composite_copy_suffix` docstring). The
+    caller must report a non-empty `unmatched_stems` LOUDLY (see the
+    `stage_composites_o` warning in the v3 cell)."""
     excluded: set[str] = set()
     unmatched: list[str] = []
     for s in val_stems:
@@ -686,23 +715,26 @@ def derive_val_excluded_source_ids(val_stems: list[str]) -> tuple[set[str], list
 
 
 def merge_composite_manifest(local_manifest_path: str | Path, drive_manifest_path: str | Path) -> int:
-    """`local_manifest_path`teki satırları `drive_manifest_path`e APPEND eder —
-    yalnız `drive_manifest_path`de henüz OLMAYAN `id`'ler (dedupe; idempotent:
-    aynı çağrı iki kez yapılırsa ikinci çağrı 0 satır ekler). `drive_manifest_
-    path` (v1/v2'nin TÜM `_v<NN>` satırlarını zaten içeren, büyük — ~28k+ satır
-    — Drive kopyası) ASLA baştan okunup YENİDEN YAZILMAZ, yalnız açılıp eklenir
-    (`benchmark.testset.append_entries`) — `training/v3_veri_guncelleme_
-    hucresi.py`'nin `shutil.copy2` ile TAM üzerine yazan `colab_devam_hucresi.py`
-    deseninden BİLİNÇLİ SAPMASI budur (o dosyada yerel kompozit manifest zaten
-    TAM/güncel olduğundan üzerine yazmak güvenliydi; burada yerel manifest
-    yalnız YENİ `_o00` satırlarını içeriyor). `local_manifest_path` yoksa
-    (hiç `_o00` üretilmemişse) sessizce `0` döner.
+    """APPENDs the rows from `local_manifest_path` to `drive_manifest_path` —
+    only the `id`s not yet PRESENT in `drive_manifest_path` (dedupe;
+    idempotent: if the same call is made twice, the second call appends 0
+    rows). `drive_manifest_path` (the large Drive copy — ~28k+ rows — already
+    containing ALL of v1/v2's `_v<NN>` rows) is NEVER read in full and
+    REWRITTEN, only opened and appended to
+    (`benchmark.testset.append_entries`) — this is the DELIBERATE DEPARTURE of
+    `training/v3_veri_guncelleme_hucresi.py` from the `colab_devam_hucresi.py`
+    pattern of fully overwriting with `shutil.copy2` (in that file the local
+    composite manifest was already COMPLETE/current, so overwriting was safe;
+    here the local manifest contains only the NEW `_o00` rows). If
+    `local_manifest_path` does not exist (no `_o00` was ever generated),
+    silently returns `0`.
 
-    `drive_manifest_path` mevcutsa satırları TEK TEK okunup yalnız `id`
-    alanları kümeye eklenir (tam `load_manifest` + `_validate` çağrılmaz —
-    büyük dosyada yalnız id kümesi için gereksiz doğrulama/bellek maliyetinden
-    kaçınmak için); `local_manifest_path` ise (küçük, ~14k satır) tam
-    `load_manifest` ile okunur (tekrarlanan id koruması dahil)."""
+    If `drive_manifest_path` exists, its rows are read ONE BY ONE and only the
+    `id` fields are added to the set (the full `load_manifest` + `_validate`
+    is not called — to avoid unnecessary validation/memory cost on the large
+    file when only the id set is needed); `local_manifest_path` (small, ~14k
+    rows) is read with the full `load_manifest` (including the duplicate-id
+    guard)."""
     local_manifest_path = Path(local_manifest_path)
     drive_manifest_path = Path(drive_manifest_path)
     if not local_manifest_path.exists():
@@ -724,101 +756,106 @@ def merge_composite_manifest(local_manifest_path: str | Path, drive_manifest_pat
 
 
 def ensure_manifest_pairs(manifest_path: str | Path, min_pairs: int = 1) -> int:
-    """`manifest_path`teki GT'li (gt_alpha != null) satır sayısını döndürür;
-    dosya yoksa veya sayı `min_pairs`'ın altındaysa NET bir `RuntimeError`
-    fırlatır — boş/eksik bir manifest'le pipeline'ın devam edip çok daha
-    aşağıda anlaşılmaz bir hatayla (ör. export'un FileNotFoundError'ı) çökmesini
-    önler (canlı v3 koşusu dersi: ham veri hiç inmemişken manifest 0 çiftle
-    kuruldu, hata ancak export aşamasında — SEMPTOM olarak — göründü; bu guard
-    NEDENİ, manifest kurulumundan hemen sonra, yüksek sesle yakalar). Bkz.
-    `training/v3_veri_guncelleme_hucresi.py` "manifest" aşaması sonu."""
+    """Returns the number of rows with GT (gt_alpha != null) in
+    `manifest_path`; if the file is missing or the count is below `min_pairs`,
+    raises a CLEAR `RuntimeError` — preventing the pipeline from continuing
+    with an empty/deficient manifest and crashing much further down with a
+    baffling error (e.g. the export's FileNotFoundError) (lesson from the live
+    v3 run: the manifest was built with 0 pairs while the raw data had never
+    downloaded, and the failure only surfaced at the export stage — as a
+    SYMPTOM; this guard catches the CAUSE, right after manifest setup,
+    loudly). See the end of the "manifest" stage in
+    `training/v3_veri_guncelleme_hucresi.py`."""
     manifest_path = Path(manifest_path)
     if not manifest_path.exists():
         raise RuntimeError(
-            f"manifest dosyası yok: {manifest_path} — ham veri indirme/manifest kurulumu "
-            f"başarısız olmuş olmalı; önceki aşamaların loglarını inceleyin."
+            f"manifest file missing: {manifest_path} — raw data download/manifest setup "
+            f"must have failed; inspect the logs of the earlier stages."
         )
     n = sum(1 for r in load_manifest(str(manifest_path)) if r.get("gt_alpha"))
     if n < min_pairs:
         raise RuntimeError(
-            f"manifest'te yalnız {n} GT'li çift var (< {min_pairs}): {manifest_path} — "
-            f"ham veri kaynakları inmemiş/boş olabilir; export'a GEÇİLMEYECEK "
-            f"(boş manifest'le devam etmek aşağıda anlaşılmaz hatalara yol açar)."
+            f"manifest contains only {n} pairs with GT (< {min_pairs}): {manifest_path} — "
+            f"raw data sources may be missing/empty; NOT proceeding to export "
+            f"(continuing with an empty manifest causes baffling errors downstream)."
         )
     return n
 
 
 # ============================================================================
-# 8) TRAIN verisinin tar shard'larına paketlenmesi (Drive FUSE hızlandırması)
-#    Paketleyen taraf: training/veri_tar_paketleme_hucresi.py (ücretsiz CPU
-#    Colab, paste-run). Tüketen taraf: training/train_colab.ipynb hücre (c)
-#    (`tcl.validate_tar_manifest` ile manifest'i doğrulayıp shard'ları indirir/
-#    açar). Aşağıdaki üç fonksiyon paketleme hücresine BİREBİR KOPYALANIR —
-#    o hücre paste-run tasarımı gereği repo klonu GEREKTİRMEZ; tek doğruluk
-#    kaynağı BURASIDIR, kopya ile buradaki kaynak arasındaki drift
-#    tests/test_train_colab_lib.py'deki AST karşılaştırma testiyle yakalanır.
+# 8) Packing the TRAIN data into tar shards (Drive FUSE speedup)
+#    Packing side: training/veri_tar_paketleme_hucresi.py (free CPU Colab,
+#    paste-run). Consuming side: training/train_colab.ipynb cell (c)
+#    (validates the manifest with `tcl.validate_tar_manifest`, then downloads/
+#    extracts the shards). The three functions below are copied VERBATIM into
+#    the packing cell — by its paste-run design that cell must NOT require a
+#    repo clone; the single source of truth is HERE, and drift between the
+#    copy and this source is caught by the AST comparison test in
+#    tests/test_train_colab_lib.py.
 # ============================================================================
 def tar_shard_name(index: int) -> str:
-    """`index` (0 tabanlı) için shard tar dosya adı: `TRAIN_shard_{index:02d}.tar`.
-    Adlandırma sözleşmesinin TEK kaynağı — paketleyen hücre bu adla yazar,
-    notebook tarafı manifest'teki `name` alanları üzerinden okur."""
+    """Shard tar file name for `index` (0-based): `TRAIN_shard_{index:02d}.tar`.
+    The SINGLE source of the naming contract — the packing cell writes under
+    this name, the notebook side reads via the `name` fields in the manifest."""
     if index < 0:
-        raise ValueError(f"index >= 0 olmalı: {index}")
+        raise ValueError(f"index must be >= 0: {index}")
     return f"TRAIN_shard_{index:02d}.tar"
 
 
 def split_stems_to_shards(stems: list[str], shard_size: int) -> list[list[str]]:
-    """`stems`'i SIRALI ve DETERMİNİSTİK shard'lara böler: önce `sorted()`,
-    sonra ardışık `shard_size`'lık dilimler — sonuç girdi (dosya sistemi
-    listeleme) sırasından BAĞIMSIZ, yeniden koşularda AYNIDIR (idempotent
-    shard atlama ancak böyle mümkün: aynı stem kümesi her koşuda aynı shard'a
-    düşer). Toplam KORUNUR: dilimlerin ardışık birleşimi `sorted(stems)`'in
-    kendisidir (kayıp/tekrar yok); son dilim `shard_size`'dan kısa olabilir.
-    Boş liste -> boş liste. `shard_size <= 0` -> ValueError."""
+    """Splits `stems` into ORDERED, DETERMINISTIC shards: first `sorted()`,
+    then consecutive `shard_size`-sized slices — the result is INDEPENDENT of
+    the input (filesystem listing) order and IDENTICAL across re-runs
+    (idempotent shard skipping is only possible this way: the same stem set
+    lands in the same shard on every run). The total is PRESERVED: the
+    consecutive concatenation of the slices is `sorted(stems)` itself (no
+    loss/duplication); the last slice may be shorter than `shard_size`.
+    Empty list -> empty list. `shard_size <= 0` -> ValueError."""
     if shard_size <= 0:
-        raise ValueError(f"shard_size > 0 olmalı: {shard_size}")
+        raise ValueError(f"shard_size must be > 0: {shard_size}")
     stems_sorted = sorted(stems)
     return [stems_sorted[i : i + shard_size] for i in range(0, len(stems_sorted), shard_size)]
 
 
 def validate_tar_manifest(manifest: dict, expected_total: int | None = None) -> int:
-    """Tar manifest'inin (`bg-remover-data/tar/_manifest.json`) iç tutarlılığını
-    doğrular ve `total_pairs`'ı döndürür; her tutarsızlıkta NET bir RuntimeError
-    fırlatır (sessizce devam etmek = eksik/bozuk veriyle eğitime girme riski):
-    - `shards` boş olmayan bir liste, `total_pairs` pozitif bir tamsayı olmalı;
-    - her shard girdisinde `name`/`pairs`/`bytes` bulunmalı ve `pairs`/`bytes` > 0;
-    - shard adları benzersiz olmalı (aynı tar iki kez sayılmasın);
-    - shard `pairs` toplamı `total_pairs`'a eşit olmalı;
-    - `expected_total` verilmişse `total_pairs` ona da eşit olmalı (paketleyen
-      hücre kaynak TRAIN listeleme uzunluğunu geçirir — Drive listelemesiyle
-      manifest'in aynı veri setini anlattığı garanti edilir)."""
+    """Validates the internal consistency of the tar manifest
+    (`bg-remover-data/tar/_manifest.json`) and returns `total_pairs`; raises a
+    CLEAR RuntimeError on every inconsistency (continuing silently = the risk
+    of training on missing/corrupt data):
+    - `shards` must be a non-empty list, `total_pairs` a positive integer;
+    - every shard entry must have `name`/`pairs`/`bytes`, with `pairs`/`bytes` > 0;
+    - shard names must be unique (the same tar must not be counted twice);
+    - the sum of shard `pairs` must equal `total_pairs`;
+    - if `expected_total` is given, `total_pairs` must also equal it (the
+      packing cell passes the source TRAIN listing length — guaranteeing the
+      manifest describes the same dataset as the Drive listing)."""
     shards = manifest.get("shards")
     total = manifest.get("total_pairs")
     if not isinstance(shards, list) or not shards:
         raise RuntimeError(
-            f"tar manifest'inde boş olmayan bir 'shards' listesi yok (paketleme hücresi "
-            f"hiç koşmamış ya da yarım kalmış olabilir): {shards!r}"
+            f"tar manifest has no non-empty 'shards' list (the packing cell may "
+            f"never have run, or may have died halfway): {shards!r}"
         )
     if not isinstance(total, int) or total <= 0:
-        raise RuntimeError(f"tar manifest'inde pozitif bir 'total_pairs' alanı yok: {total!r}")
+        raise RuntimeError(f"tar manifest has no positive 'total_pairs' field: {total!r}")
     names: list[str] = []
     total_from_shards = 0
     for entry in shards:
         name, pairs, n_bytes = entry.get("name"), entry.get("pairs"), entry.get("bytes")
         if not name or not isinstance(pairs, int) or pairs <= 0 or not isinstance(n_bytes, int) or n_bytes <= 0:
-            raise RuntimeError(f"bozuk shard girdisi (name/pairs/bytes eksik ya da <= 0): {entry!r}")
+            raise RuntimeError(f"corrupt shard entry (name/pairs/bytes missing or <= 0): {entry!r}")
         names.append(name)
         total_from_shards += pairs
     if len(set(names)) != len(names):
-        raise RuntimeError(f"tar manifest'inde tekrar eden shard adları var: {names}")
+        raise RuntimeError(f"tar manifest contains duplicate shard names: {names}")
     if total_from_shards != total:
         raise RuntimeError(
-            f"shard 'pairs' toplamı ({total_from_shards}) manifest'in 'total_pairs' değeriyle "
-            f"({total}) uyuşmuyor — manifest bozuk, paketleme hücresi yeniden koşulmalı."
+            f"sum of shard 'pairs' ({total_from_shards}) does not match the manifest's "
+            f"'total_pairs' value ({total}) — manifest is corrupt, re-run the packing cell."
         )
     if expected_total is not None and total != expected_total:
         raise RuntimeError(
-            f"manifest'in 'total_pairs' değeri ({total}) beklenen kaynak çift sayısıyla "
-            f"({expected_total}) uyuşmuyor."
+            f"manifest 'total_pairs' value ({total}) does not match the expected "
+            f"source pair count ({expected_total})."
         )
     return total

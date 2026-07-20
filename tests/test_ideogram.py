@@ -9,7 +9,7 @@ def test_skips_existing_output(tmp_path):
     out = tmp_path / "x.png"
     Image.new("RGBA", (4, 4)).save(out)
     with patch("benchmark.ideogram.fal_client") as m:
-        fetch_reference("gercek-degil.jpg", str(out))
+        fetch_reference("not-real.jpg", str(out))
         m.subscribe.assert_not_called()
 
 

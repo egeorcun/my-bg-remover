@@ -1,4 +1,4 @@
-"""Tek görselde inference: uv run python scripts/infer.py girdi.jpg cikti.png"""
+"""Single-image inference: uv run python scripts/infer.py input.jpg output.png"""
 import sys
 
 import numpy as np
@@ -17,7 +17,7 @@ def main() -> None:
     rgba = img.convert("RGB").copy()
     rgba.putalpha(Image.fromarray((alpha * 255).astype(np.uint8)))
     rgba.save(dst)
-    print(f"kaydedildi: {dst}")
+    print(f"saved: {dst}")
 
 
 if __name__ == "__main__":

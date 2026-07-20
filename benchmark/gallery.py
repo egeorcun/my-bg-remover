@@ -1,4 +1,4 @@
-"""Yan yana HTML galeri: orijinal | model alpha kompozitleri | Ideogram."""
+"""Side-by-side HTML gallery: original | model alpha composites | Ideogram."""
 import argparse
 import html
 import os
@@ -25,7 +25,7 @@ def _img_cell(out_dir: Path, src: Path, label: str) -> str:
 
 
 def _build_composite(image_path: Path, mask_path: Path, composite_path: Path) -> Path:
-    """Orijinal görsel (RGB) + model maskesi (alfa kanalı) -> RGBA kompozit, önbelleklenir."""
+    """Original image (RGB) + model mask (alpha channel) -> RGBA composite, cached."""
     if composite_path.exists():
         return composite_path
     rgb = Image.open(image_path).convert("RGB")
@@ -55,7 +55,7 @@ def build_gallery(manifest_path: str, results_dir: str, models: list[str], out_h
     for cat in sorted(by_cat):
         parts.append(f"<h2>{html.escape(cat)}</h2>")
         for row in by_cat[cat]:
-            cells = [_img_cell(out_dir, Path(row["image"]).resolve(), "orijinal")]
+            cells = [_img_cell(out_dir, Path(row["image"]).resolve(), "original")]
             if row["gt_alpha"]:
                 cells.append(_img_cell(out_dir, Path(row["gt_alpha"]).resolve(), "GT"))
             for m in models:
@@ -83,7 +83,7 @@ def main() -> None:
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     build_gallery(a.manifest, a.results, a.models.split(","), a.out)
-    print(f"galeri: {a.out}")
+    print(f"gallery: {a.out}")
 
 
 if __name__ == "__main__":
