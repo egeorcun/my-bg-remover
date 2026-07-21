@@ -197,6 +197,23 @@ def _git_pull_idempotent() -> None:
         print(f"WARNING: could not run git pull ({e}) — continuing with the existing clone.")
 
 
+def _purge_script_module_cache() -> None:
+    """Colab keeps one kernel across cell interrupts/re-runs, and Python
+    caches imported modules in sys.modules — so after a `git pull` an
+    `import make_bokeh_copies` would silently reuse the PRE-pull module
+    (lived through exactly this on 2026-07-21: an interrupted first run left
+    the old, slow generator cached, and the re-run kept executing it while
+    the pulled optimization sat unused on disk). The scripts/ modules and
+    the training lib are evicted so the imports below always load the
+    just-pulled code; a kernel restart is no longer required after a pull."""
+    import importlib
+
+    for name in ("make_bokeh_copies", "make_design", "make_textfx",
+                 "make_v6_copies", "export_birefnet", "build_testset", "build_trainset"):
+        sys.modules.pop(name, None)
+    importlib.reload(tcl)
+
+
 def _setup_hf_env() -> None:
     """Source: same function in the v4/v7 cells (for HF downloads)."""
     os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "30")
@@ -222,6 +239,7 @@ def stage0_env() -> None:
     report("env", "running")
     os.chdir(WORKDIR)
     _git_pull_idempotent()
+    _purge_script_module_cache()
     _setup_hf_env()
 
     free_gb = shutil.disk_usage("/content").free / 1e9
