@@ -956,9 +956,18 @@ def _merge_into_drive_train(src: Path, expect_overwrite: bool, manifest_local: P
 
     # ONLY the TRAIN/ subtree is copied — the PARTIAL stats.json at the src
     # root is NOT copied so it does not clobber the authoritative FULL
-    # stats.json on Drive (v3 fix).
-    print(f"Copying (MERGE, TRAIN/ only): {src / 'TRAIN'} -> {dst / 'TRAIN'}")
-    shutil.copytree(src / "TRAIN", dst / "TRAIN", dirs_exist_ok=True)
+    # stats.json on Drive (v3 fix). tcl.copy_pairs instead of
+    # shutil.copytree (2026-07-21 lesson, live in THIS run): single-threaded
+    # copytree overwrites crawled on Drive FUSE (the 6k design overwrite sat
+    # >1.5h with no output), while copy_pairs is threaded x16, size-checked
+    # (skips up-to-date pairs -> an interrupted merge RESUMES instead of
+    # re-copying everything) and prints progress.
+    stems = sorted(p.stem for p in src_im_files)
+    print(f"Copying (MERGE, TRAIN/ only, copy_pairs x16): {src / 'TRAIN'} -> {dst / 'TRAIN'}")
+    n_copied = tcl.copy_pairs(
+        stems, src / "TRAIN" / "im", src / "TRAIN" / "gt", dst_train_im, dst_train_gt
+    )
+    print(f"copy_pairs: {n_copied} pairs copied/repaired, {len(stems) - n_copied} already up to date.")
 
     post_im, post_gt = len(_listdir_retry(dst_train_im)), len(_listdir_retry(dst_train_gt))
     print(f"Drive TRAIN after merge: im={post_im}, gt={post_gt}")
