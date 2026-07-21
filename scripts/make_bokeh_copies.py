@@ -70,6 +70,12 @@ BG_MIN_RATIO = 0.15      # true-background ratio threshold (alpha == 0)
 
 BLUR_FRAC_LO, BLUR_FRAC_HI = 0.008, 0.03  # blur sigma / min(h, w)
 BLUR_SIGMA_MIN, BLUR_SIGMA_MAX = 3.0, 25.0
+# The background layer is computed at this working resolution and upscaled
+# (bokeh is low-frequency by definition — a full-res gaussian on a 2048px
+# image costs ~16x more for a visually identical layer; measured on Colab's
+# 2-vCPU runtime the full-res path ran at ~1.5-2.5 s/pair).
+WORK_MIN_SIDE = 640
+GEN_WORKERS = 4  # numpy/scipy/PIL release the GIL — threads give ~2x on 2 vCPUs
 ORB_PROB = 0.5           # probability of bright bokeh orbs in the background
 ORB_COUNT_LO, ORB_COUNT_HI = 3, 12  # inclusive-inclusive
 ORB_RADIUS_LO, ORB_RADIUS_HI = 0.015, 0.06  # orb radius / min(h, w)
@@ -152,6 +158,13 @@ def is_bokeh_source(alpha: np.ndarray) -> bool:
     return solid >= SOLID_MIN_RATIO and bg >= BG_MIN_RATIO
 
 
+def _resize_f32(arr: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+    """Bilinear resize of a float32 (H, W) array via PIL mode-F; size=(w, h)."""
+    return np.asarray(
+        Image.fromarray(arr, mode="F").resize(size, Image.BILINEAR), dtype=np.float32
+    )
+
+
 def _bokeh_background(
     rng: np.random.Generator, rgb: np.ndarray, alpha: np.ndarray
 ) -> np.ndarray:
@@ -162,20 +175,41 @@ def _bokeh_background(
     weight — the background is extended UNDER the subject instead of the
     subject's colors bleeding into the blur ring. Optional bright soft orbs
     (screen-like blend toward a light color) imitate out-of-focus highlights;
-    they live only in this background layer, so the GT stays 0 on them."""
+    they live only in this background layer, so the GT stays 0 on them.
+
+    The whole layer is computed at `WORK_MIN_SIDE` working resolution and
+    bilinearly upscaled — the layer is low-frequency (blur + soft orbs), so
+    the upscale is visually lossless while cutting the cost ~scale^2. All
+    rng draws happen at FULL-resolution semantics (sigma from the full
+    min(h, w), orb centers checked against the full-res alpha), so the draw
+    sequence is identical whatever the scale."""
     h, w = alpha.shape
     sigma = float(np.clip(
         min(h, w) * float(rng.uniform(BLUR_FRAC_LO, BLUR_FRAC_HI)),
         BLUR_SIGMA_MIN, BLUR_SIGMA_MAX,
     ))
-    inv = (1.0 - alpha).astype(np.float32)
-    num = ndimage.gaussian_filter(rgb.astype(np.float32) * inv[..., None], (sigma, sigma, 0))
-    den = ndimage.gaussian_filter(inv, sigma)
+    scale = max(1, round(min(h, w) / WORK_MIN_SIDE))
+    lw, lh = max(1, w // scale), max(1, h // scale)
+    if scale > 1:
+        rgb_l = np.asarray(
+            Image.fromarray(rgb, mode="RGB").resize((lw, lh), Image.BILINEAR),
+            dtype=np.float32,
+        )
+        alpha_l = np.clip(_resize_f32(alpha, (lw, lh)), 0.0, 1.0)
+    else:
+        lw, lh = w, h
+        rgb_l = rgb.astype(np.float32)
+        alpha_l = alpha
+    sigma_l = max(1.0, sigma / scale)
+
+    inv = (1.0 - alpha_l).astype(np.float32)
+    num = ndimage.gaussian_filter(rgb_l * inv[..., None], (sigma_l, sigma_l, 0))
+    den = ndimage.gaussian_filter(inv, sigma_l)
     blurred = num / np.maximum(den, 1e-4)[..., None]
 
     if rng.uniform() < ORB_PROB:
-        yy = np.arange(h, dtype=np.float32)[:, None]
-        xx = np.arange(w, dtype=np.float32)[None, :]
+        yy = np.arange(lh, dtype=np.float32)[:, None]
+        xx = np.arange(lw, dtype=np.float32)[None, :]
         for _ in range(int(rng.integers(ORB_COUNT_LO, ORB_COUNT_HI + 1))):
             cy, cx = 0.0, 0.0
             for _try in range(8):  # prefer centers on background pixels
@@ -184,13 +218,21 @@ def _bokeh_background(
                 if alpha[min(h - 1, int(cy)), min(w - 1, int(cx))] < 0.1:
                     break
             r = min(h, w) * float(rng.uniform(ORB_RADIUS_LO, ORB_RADIUS_HI))
-            disc = np.exp(-((yy - cy) ** 2 + (xx - cx) ** 2) / (2 * (r / 2.0) ** 2))
             strength = float(rng.uniform(ORB_STRENGTH_LO, ORB_STRENGTH_HI))
             color = np.asarray(
                 [float(rng.uniform(180, 255)) for _ in range(3)], dtype=np.float32
             )
+            disc = np.exp(
+                -((yy - cy / scale) ** 2 + (xx - cx / scale) ** 2)
+                / (2 * (r / scale / 2.0) ** 2)
+            )
             blurred = blurred + strength * disc[..., None] * (color - blurred)
 
+    if scale > 1:
+        blurred = np.stack(
+            [_resize_f32(np.ascontiguousarray(blurred[..., c]), (w, h)) for c in range(3)],
+            axis=-1,
+        )
     return np.clip(blurred, 0.0, 255.0)
 
 
@@ -247,27 +289,50 @@ def gen_bokeh(
     category_by_stem: dict[str, str],
     seed: int,
     existing_ids: set[str],
+    workers: int = GEN_WORKERS,
 ) -> tuple[list[dict], int, int]:
-    """One `{stem}_k00` copy per source. Returns (rows, generated, skipped)."""
+    """One `{stem}_k00` copy per source. Returns (rows, generated, skipped).
+
+    Generation is distributed over `workers` threads (each pair's output
+    files are unique to it — no shared state; numpy/scipy/PIL release the
+    GIL during the heavy ops, the copy_pairs threading argument). Per-item
+    determinism is untouched (`_item_rng` keys on the stem, not the order);
+    the returned rows are sorted so the manifest stays order-deterministic.
+    Progress is printed every 250 generated pairs (v8 lesson: a multi-hour
+    silent stage is indistinguishable from a hung one)."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     new_rows: list[dict] = []
-    generated = skipped = 0
+    pending: list[tuple[str, str, dict]] = []
+    skipped = 0
     for stem in sources:
         new_stem = f"{stem}_k00"
-        img_path = out_im_dir / f"{new_stem}.jpg"
-        gt_path = out_gt_dir / f"{new_stem}.png"
         row = {"id": new_stem, "category": category_by_stem[stem]}
-        if img_path.exists() and gt_path.exists():
+        if (out_im_dir / f"{new_stem}.jpg").exists() and (out_gt_dir / f"{new_stem}.png").exists():
             skipped += 1
             if new_stem not in existing_ids:
                 new_rows.append(row)  # file exists, manifest line missing -> line only
             continue
+        pending.append((stem, new_stem, row))
+
+    def _one(item: tuple[str, str, dict]) -> dict:
+        stem, new_stem, row = item
         rng = _item_rng(seed, new_stem)
         rgb = _load_rgb(train_im_dir / f"{stem}.jpg")
         alpha = _load_alpha(train_gt_dir / f"{stem}.png", (rgb.shape[1], rgb.shape[0]))
         out_rgb, out_alpha = render_bokeh_copy(rng, rgb, alpha)
-        _save_pair(out_rgb, out_alpha, img_path, gt_path)
-        new_rows.append(row)
-        generated += 1
+        _save_pair(out_rgb, out_alpha, out_im_dir / f"{new_stem}.jpg", out_gt_dir / f"{new_stem}.png")
+        return row
+
+    generated = 0
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+        for fut in as_completed([ex.submit(_one, item) for item in pending]):
+            new_rows.append(fut.result())  # an exception fails the stage loudly
+            generated += 1
+            if generated % 250 == 0:
+                print(f"bokeh progress: {generated}/{len(pending)} generated")
+
+    new_rows.sort(key=lambda r: r["id"])
     return new_rows, generated, skipped
 
 

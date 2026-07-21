@@ -94,6 +94,25 @@ def test_gt_byte_identical_and_bg_actually_blurred(env):
         assert float(np.abs(out[:20, :] - src[:20, :]).mean()) > 8.0
 
 
+def test_render_large_image_downscaled_blur_path():
+    """scale > 1 (WORK_MIN_SIDE optimization): the GT contract and the
+    subject-interior fidelity hold on large images too, where the background
+    layer is computed at working resolution and upscaled."""
+    rng = np.random.default_rng(3)
+    noise = np.random.default_rng(4)
+    rgb = noise.integers(0, 256, (1400, 1400, 3), dtype=np.uint8)
+    rgb[400:1000, 400:1000] = (0, 180, 60)
+    alpha = np.zeros((1400, 1400), dtype=np.float32)
+    alpha[400:1000, 400:1000] = 1.0
+    out_rgb, out_alpha = mbc.render_bokeh_copy(rng, rgb, alpha)
+    assert out_alpha is alpha
+    # interior intact (alpha==1 -> exact original pixels)
+    assert np.array_equal(out_rgb[500:900, 500:900], rgb[500:900, 500:900])
+    # background noise visibly smoothed
+    diff = np.abs(out_rgb[:300, :].astype(np.int16) - rgb[:300, :].astype(np.int16))
+    assert float(diff.mean()) > 8.0
+
+
 def test_render_keeps_alpha_object_identity():
     rng = np.random.default_rng(0)
     rgb = np.random.default_rng(1).integers(0, 256, (64, 64, 3), dtype=np.uint8)
