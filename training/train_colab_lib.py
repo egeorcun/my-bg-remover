@@ -291,6 +291,30 @@ the two v8 regressions: **complex .17 -> .18, thin .11 -> .12**. Kept: camo
 design .06, transparent .21 (v8 record 0.0352). The training base is
 epoch_7 again — the alpha^2 epoch is discarded, not built upon."""
 
+SAMPLER_PRESET_V10: dict[str, float] = {
+    "camouflage": 0.12,
+    "transparent": 0.21,
+    "hair": 0.13,
+    "complex": 0.19,
+    "thin": 0.12,
+    "general": 0.02,
+    "text": 0.06,
+    "fx": 0.04,
+    "illustration": 0.05,
+    "design": 0.06,
+}
+"""v10 target (sums to EXACTLY 100%) — the background-purity-LOSS epoch,
+trained ON TOP of v9's healthy epoch_8. v9 delivered the transparency
+milestone (0.0338 — the commercial reference finally beaten) and camo/text
+records, but the release bar is explicit: no release while the real-photo
+background haze persists (hair bg_mae 0.0070 vs birefnet 0.0003 — flat
+across v5..v9 despite two data-side fixes) and while complex sits below v7
+(0.0527 vs 0.0484). The smear attack moves to the LOSS level
+(training/torch_losses.bg_purity_loss, notebook BG_PURITY_LAMBDA);
+share-wise: **complex .18 -> .19** (the v7 level that scored 0.0484) funded
+by **hair .14 -> .13** (hair is at parity and the smear fix no longer rides
+on the sampler). Everything else held from v9."""
+
 SAMPLER_PRESETS: dict[str, dict[str, float]] = {
     "v1": SAMPLER_PRESET_V1,
     "v2": SAMPLER_PRESET_V2,
@@ -300,6 +324,7 @@ SAMPLER_PRESETS: dict[str, dict[str, float]] = {
     "v7": SAMPLER_PRESET_V7,
     "v8": SAMPLER_PRESET_V8,
     "v9": SAMPLER_PRESET_V9,
+    "v10": SAMPLER_PRESET_V10,
 }
 """The table the notebook's `SAMPLER_PRESET` parameter ("v1"/"v2"/"v3"/"v4")
 is resolved against — see the `training/train_colab.ipynb` parameters cell and
