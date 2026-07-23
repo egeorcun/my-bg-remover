@@ -315,6 +315,30 @@ share-wise: **complex .18 -> .19** (the v7 level that scored 0.0484) funded
 by **hair .14 -> .13** (hair is at parity and the smear fix no longer rides
 on the sampler). Everything else held from v9."""
 
+SAMPLER_PRESET_V12: dict[str, float] = {
+    "camouflage": 0.12,
+    "transparent": 0.21,
+    "hair": 0.14,
+    "complex": 0.19,
+    "thin": 0.12,
+    "general": 0.02,
+    "text": 0.06,
+    "fx": 0.04,
+    "illustration": 0.04,
+    "design": 0.06,
+}
+"""v12 target (sums to EXACTLY 100%) — the CATEGORY-GATED hinge epoch, on
+top of v11's epoch_11. The unmasked hinge passed two release-bar criteria
+(complex 0.0445, transparent 0.0341) and produced the best overall
+background purity (bg_mae 0.00597, -38% vs v7), but it crushed fx
+(0.0180 -> 0.0308) and hair MAE slipped (0.0108): the pressure was landing
+on glow surroundings too. v12 gates the hinge per sample by the GT's
+soft-alpha ratio (see torch_losses.bg_hinge_loss max_soft_ratio) so the
+synthetic semi-transparent categories are exempt while every photo category
+keeps (doubled) pressure. Shares: **hair .13 -> .14** (repair the MAE slip)
+funded by illustration .05 -> .04 (0.0070 — a robust 2x lead); complex .19
+kept (the bar-passing level)."""
+
 SAMPLER_PRESETS: dict[str, dict[str, float]] = {
     "v1": SAMPLER_PRESET_V1,
     "v2": SAMPLER_PRESET_V2,
@@ -325,6 +349,7 @@ SAMPLER_PRESETS: dict[str, dict[str, float]] = {
     "v8": SAMPLER_PRESET_V8,
     "v9": SAMPLER_PRESET_V9,
     "v10": SAMPLER_PRESET_V10,
+    "v12": SAMPLER_PRESET_V12,
 }
 """The table the notebook's `SAMPLER_PRESET` parameter ("v1"/"v2"/"v3"/"v4")
 is resolved against — see the `training/train_colab.ipynb` parameters cell and

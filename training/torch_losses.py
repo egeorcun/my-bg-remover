@@ -62,6 +62,7 @@ def bg_hinge_loss(
     gt: torch.Tensor,
     tau_p: float = 0.002,
     erosion_px: int = 11,
+    max_soft_ratio: float | None = None,
 ) -> torch.Tensor:
     """Hinge penalty over the ERODED true-background region:
     mean(relu(logit - logit(tau_p))).
@@ -78,12 +79,27 @@ def bg_hinge_loss(
     tau_p is the tolerated background probability (default 0.002 ~ half an
     8-bit level); below it the pixel costs nothing, so the model is not asked
     for infinite logits. Same erosion contract as bg_purity_loss: the
-    soft-edge band is exempt, legitimate softness is untouched."""
+    soft-edge band is exempt, legitimate softness is untouched.
+
+    `max_soft_ratio` (v12, the epoch-11 lesson): the unmasked full epoch
+    bought its background gains by crushing the glow categories (fx MAE
+    0.0180 -> 0.0308 — the model truncates radiance just outside the GT
+    glow). Samples whose GT soft-alpha ratio (0.05 < gt < 0.95) exceeds this
+    threshold are EXEMPTED per-sample: at 0.03 that is exactly the synthetic
+    semi-transparent categories (transparent ~19%, design ~15%, fx ~7-17%,
+    text ~11% soft) while every photo category keeps the pressure (hair
+    ~1.4%, camo/complex/thin ~0%). None disables the gating."""
     if pred_logits.shape != gt.shape:
         raise ValueError(f"shape mismatch: {tuple(pred_logits.shape)} vs {tuple(gt.shape)}")
     if not 0.0 < tau_p < 1.0:
         raise ValueError(f"tau_p must be in (0, 1), got {tau_p}")
     bg = _eroded_bg_mask(gt, erosion_px)
+    if max_soft_ratio is not None:
+        gt_f = gt.float()
+        soft = ((gt_f > 0.05) & (gt_f < 0.95)).float()
+        soft_ratio = soft.mean(dim=(-3, -2, -1))  # per sample
+        keep = (soft_ratio <= max_soft_ratio).float().view(-1, 1, 1, 1)
+        bg = bg * keep
     n_bg = bg.sum()
     if n_bg < 1:
         return pred_logits.sum() * 0.0

@@ -118,3 +118,28 @@ def test_hinge_invalid_tau_raises():
     import pytest
     with pytest.raises(ValueError):
         bg_hinge_loss(torch.zeros(1, 1, 8, 8), torch.zeros(1, 1, 8, 8), tau_p=0.0)
+
+
+def test_hinge_soft_gt_samples_are_exempted_per_sample():
+    """v12: a batch mixing a photo-like GT (hard 0/1) and a glow-like GT
+    (lots of semi-transparency) — the hinge must pressure ONLY the photo
+    sample; the glow sample's residue costs nothing."""
+    gt = torch.zeros(2, 1, 64, 64)
+    gt[:, :, 20:44, 20:44] = 1.0
+    gt[1, :, 10:54, 10:54] = 0.4  # glow-like: ~37% soft pixels
+    gt[1, :, 20:44, 20:44] = 1.0
+    logits = torch.full((2, 1, 64, 64), -1.0, requires_grad=True)  # residue everywhere
+
+    loss = bg_hinge_loss(logits, gt, max_soft_ratio=0.03)
+    loss.backward()
+    assert loss.item() > 0
+    assert logits.grad[0, ..., 0, 0].abs().item() > 0   # photo sample: pressured
+    assert logits.grad[1].abs().sum().item() == 0.0     # glow sample: fully exempt
+
+
+def test_hinge_all_samples_soft_returns_zero():
+    gt = torch.full((1, 1, 32, 32), 0.5)  # entirely semi-transparent GT
+    logits = torch.zeros(1, 1, 32, 32, requires_grad=True)
+    loss = bg_hinge_loss(logits, gt, max_soft_ratio=0.03)
+    assert loss.item() == 0.0
+    loss.backward()
